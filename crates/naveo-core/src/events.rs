@@ -10,9 +10,32 @@ pub enum Command {
     RefreshNetworks,
     StartContainer(String),
     StopContainer(String),
+    RestartContainer(String),
+    PauseContainer(String),
+    UnpauseContainer(String),
+    KillContainer(String),
     RemoveContainer(String),
     RemoveImage(String),
     ContainerLogs(String),
+    /// Action sur tout un projet Compose : start | stop | restart | remove.
+    ProjectAction {
+        project: String,
+        action: String,
+    },
+
+    // Détail conteneur
+    /// JSON d'inspection du conteneur (one-shot).
+    InspectContainer(String),
+    /// Suit les logs en direct (clé : « docker:<name> »).
+    FollowLogs {
+        key: String,
+    },
+    /// Suit les stats en direct (clé : « stats:<name> »).
+    FollowStats(String),
+    /// Arrête un flux précédemment lancé (logs ou stats).
+    StopFollow {
+        key: String,
+    },
 
     // Kubernetes
     RefreshK8s,
@@ -24,6 +47,7 @@ pub enum Command {
         namespace: String,
         name: String,
         container: String,
+        previous: bool,
     },
 
     // Exécution de commandes (terminal)
@@ -50,17 +74,6 @@ pub enum Command {
     RefreshContexts,
 }
 
-/// Un contexte Kubernetes découvert dans les kubeconfigs locaux.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ContextInfo {
-    /// Chemin du fichier kubeconfig.
-    pub file: String,
-    /// Nom du contexte.
-    pub name: String,
-    /// Nom du cluster pointé.
-    pub cluster: String,
-}
-
 /// Un état ou un résultat poussé vers l'UI.
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -76,7 +89,13 @@ pub enum Event {
     Nodes(Vec<NodeInfo>),
     Pods(Vec<PodInfo>),
     Deployments(Vec<DeploymentInfo>),
+    Services(Vec<ServiceInfo>),
     Logs {
+        target: String,
+        text: String,
+    },
+    /// Morceau de log en direct (stream). `target` est la clé du flux.
+    LogChunk {
         target: String,
         text: String,
     },
@@ -86,6 +105,16 @@ pub enum Event {
         target: String,
         text: String,
     },
+    /// JSON d'inspection d'un conteneur.
+    Inspect {
+        target: String,
+        json: String,
+    },
+    /// Relevé de ressources d'un conteneur.
+    Stats {
+        name: String,
+        info: StatsInfo,
+    },
     /// Contextes Kubernetes découverts dans les kubeconfigs locaux.
     ContextsAvailable(Vec<ContextInfo>),
     /// Connexion réussie à un contexte Kubernetes.
@@ -93,6 +122,17 @@ pub enum Event {
         context: String,
     },
     Error(String),
+}
+
+/// Contextes Kubernetes découverts dans les kubeconfigs locaux.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ContextInfo {
+    /// Chemin du fichier kubeconfig.
+    pub file: String,
+    /// Nom du contexte.
+    pub name: String,
+    /// Nom du cluster pointé.
+    pub cluster: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +175,17 @@ pub struct NetworkInfo {
     pub scope: String,
 }
 
+/// Relevé de ressources instantané d'un conteneur.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StatsInfo {
+    pub cpu_percent: f64,
+    pub mem_used_bytes: u64,
+    pub mem_limit_bytes: u64,
+    pub mem_percent: f64,
+    pub net_rx_bytes: u64,
+    pub net_tx_bytes: u64,
+}
+
 // ---------------------------------------------------------------------------
 // Modèles Kubernetes
 // ---------------------------------------------------------------------------
@@ -150,15 +201,31 @@ pub struct NodeInfo {
     pub memory: String,
 }
 
+/// État d'un conteneur au sein d'un pod.
+#[derive(Debug, Clone, Default)]
+pub struct ContainerStatusInfo {
+    pub name: String,
+    pub image: String,
+    pub ready: bool,
+    pub restarts: i32,
+    /// running | waiting | terminated
+    pub state: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PodInfo {
     pub name: String,
     pub namespace: String,
+    /// Nœud sur lequel tourne le pod (spec.nodeName).
     pub node: String,
+    pub pod_ip: String,
     /// Phase du pod : Running, Pending, Succeeded, Failed…
     pub phase: String,
     pub restarts: i32,
-    pub containers: Vec<String>,
+    pub containers: Vec<ContainerStatusInfo>,
+    /// Kind du propriétaire (Deployment, DaemonSet, Job…), s'il existe.
+    pub owner: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -168,4 +235,14 @@ pub struct DeploymentInfo {
     pub replicas_ready: i32,
     pub replicas_desired: i32,
     pub image: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ServiceInfo {
+    pub name: String,
+    pub namespace: String,
+    /// ClusterIP, NodePort, LoadBalancer, ExternalName…
+    pub service_type: String,
+    pub cluster_ip: String,
+    pub ports: Vec<String>,
 }

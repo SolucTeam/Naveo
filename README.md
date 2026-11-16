@@ -90,9 +90,12 @@ et affiche l'état des connexions ; les pages concernées restent désactivées.
 
 - [x] ~~Terminal : exécution de commandes dans conteneurs et pods~~
 - [x] ~~Multi-cluster : sélecteur de contexte + import de kubeconfig~~
+- [x] ~~Suivi des logs en continu (follow)~~
+- [x] ~~Détail conteneur : stats live (CPU/mémoire/réseau) + inspect JSON~~
+- [x] ~~Docker : pause/reprise/kill + actions sur tout un projet Compose~~
+- [x] ~~Kubernetes : drill-down par conteneur des pods, logs précédents (crash), filtre de namespace, Services~~
 - [ ] Terminal interactif (session PTY persistante)
 - [ ] Éditeur YAML avec application des changements
-- [ ] Suivi des logs en continu (follow)
 - [ ] RBAC-aware : masquer les actions non permises
 - [ ] Compose : `up`/`down` depuis l'UI
 - [ ] Machines Linux

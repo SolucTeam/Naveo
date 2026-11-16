@@ -1,6 +1,6 @@
 //! État global de l'application, navigation et boucle principale egui.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
@@ -10,7 +10,7 @@ use crate::theme::{self, Palette};
 use crate::views;
 
 /// Pages de la sidebar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Page {
     Conteneurs,
     Images,
@@ -18,7 +18,10 @@ pub enum Page {
     Reseaux,
     Noeuds,
     Pods,
+    Services,
     Deploiements,
+    /// Page détail d'un conteneur Docker (logs live, stats, inspect).
+    ContainerDetail(String),
     Terminal,
     Journal,
     Parametres,
@@ -55,6 +58,16 @@ pub struct NaveoApp {
     // Multi-cluster
     pub(crate) contexts: Vec<naveo_core::ContextInfo>,
 
+    // Détail conteneur / flux en direct
+    pub(crate) stats: HashMap<String, naveo_core::StatsInfo>,
+    pub(crate) inspect: HashMap<String, String>,
+    pub(crate) following: HashSet<String>,
+    pub(crate) log_filter: String,
+    /// Filtre de namespace Kubernetes (Tous si None).
+    pub(crate) ns_filter: Option<String>,
+    pub(crate) services: Vec<naveo_core::ServiceInfo>,
+    prev_page: Option<Page>,
+
     pub(crate) search: String,
     pub(crate) error: Option<String>,
     pub(crate) last_refresh: Instant,
@@ -89,6 +102,13 @@ impl NaveoApp {
             exec_target: None,
             exec_busy: false,
             contexts: Vec::new(),
+            stats: HashMap::new(),
+            inspect: HashMap::new(),
+            following: HashSet::new(),
+            log_filter: String::new(),
+            ns_filter: None,
+            services: Vec::new(),
+            prev_page: None,
             search: String::new(),
             error: None,
             last_refresh: Instant::now() - Duration::from_secs(10),
@@ -167,6 +187,18 @@ impl NaveoApp {
                     self.logs.insert(target.clone(), text);
                     self.log_target = Some(target);
                 }
+                Event::Services(s) => self.services = s,
+                Event::LogChunk { target, text } => {
+                    let entry = self.logs.entry(target.clone()).or_default();
+                    entry.push_str(&text);
+                    self.log_target = Some(target);
+                }
+                Event::Stats { name, info } => {
+                    self.stats.insert(name, info);
+                }
+                Event::Inspect { target, json } => {
+                    self.inspect.insert(target, json);
+                }
                 Event::ExecOutput { target, text } => {
                     let entry = self.exec_out.entry(target.clone()).or_default();
                     entry.push_str(&text);
@@ -205,6 +237,27 @@ impl eframe::App for NaveoApp {
 
         self.poll_events();
 
+        // Changement de page : démarre/arrête les flux du détail conteneur.
+        if self.prev_page.as_ref() != Some(&self.page) {
+            if let Some(Page::ContainerDetail(name)) = &self.prev_page {
+                self.send(naveo_core::Command::StopFollow {
+                    key: format!("docker:{name}"),
+                });
+                self.send(naveo_core::Command::StopFollow {
+                    key: format!("stats:{name}"),
+                });
+                self.following.remove(&format!("docker:{name}"));
+            }
+            if let Page::ContainerDetail(name) = &self.page {
+                let key = format!("docker:{name}");
+                self.following.insert(key.clone());
+                self.send(naveo_core::Command::FollowLogs { key });
+                self.send(naveo_core::Command::FollowStats(name.clone()));
+                self.send(naveo_core::Command::InspectContainer(name.clone()));
+            }
+            self.prev_page = Some(self.page.clone());
+        }
+
         // Auto-rafraîchissement toutes les 5 s.
         if self.last_refresh.elapsed() > Duration::from_secs(5) {
             self.refresh_visible();
@@ -223,14 +276,16 @@ impl eframe::App for NaveoApp {
                     .fill(self.palette.bg)
                     .inner_margin(egui::Margin::symmetric(16, 12)),
             )
-            .show(ctx, |ui| match self.page {
+            .show(ctx, |ui| match self.page.clone() {
                 Page::Conteneurs => views::containers::show(self, ui),
                 Page::Images => views::images::show(self, ui),
                 Page::Volumes => views::volumes::show(self, ui),
                 Page::Reseaux => views::networks::show(self, ui),
                 Page::Noeuds => views::k8s::nodes(self, ui),
                 Page::Pods => views::k8s::pods(self, ui),
+                Page::Services => views::k8s::services(self, ui),
                 Page::Deploiements => views::k8s::deployments(self, ui),
+                Page::ContainerDetail(name) => views::detail::show(self, ui, &name),
                 Page::Terminal => views::terminal::show(self, ui),
                 Page::Journal => views::logs::show(self, ui),
                 Page::Parametres => views::settings::show(self, ui),
@@ -304,6 +359,7 @@ impl NaveoApp {
                 ui.add_space(2.0);
                 self.nav_item(ui, "🖥", "Nœuds", Page::Noeuds);
                 self.nav_item(ui, "🫧", "Pods", Page::Pods);
+                self.nav_item(ui, "🔌", "Services", Page::Services);
                 self.nav_item(ui, "🚀", "Déploiements", Page::Deploiements);
 
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {

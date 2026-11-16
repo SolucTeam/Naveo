@@ -15,7 +15,7 @@ use kube::Client;
 
 pub use events::{
     Command, ContainerInfo, ContextInfo, DeploymentInfo, Event, ImageInfo, NetworkInfo, NodeInfo,
-    PodInfo, VolumeInfo,
+    PodInfo, ServiceInfo, StatsInfo, VolumeInfo,
 };
 
 /// Exécute une commande dans le runtime asynchrone et pousse
@@ -53,6 +53,39 @@ pub async fn dispatch(
             docker::stop_container(docker, &name).await?;
             tx.send(Event::Containers(docker::list_containers(docker).await?))?;
         }
+        Command::RestartContainer(name) => {
+            let docker = docker.ok_or_else(|| anyhow::anyhow!("Docker non connecté"))?;
+            docker::restart_container(docker, &name).await?;
+            tx.send(Event::Containers(docker::list_containers(docker).await?))?;
+        }
+        Command::PauseContainer(name) => {
+            let docker = docker.ok_or_else(|| anyhow::anyhow!("Docker non connecté"))?;
+            docker::pause_container(docker, &name).await?;
+            tx.send(Event::Containers(docker::list_containers(docker).await?))?;
+        }
+        Command::UnpauseContainer(name) => {
+            let docker = docker.ok_or_else(|| anyhow::anyhow!("Docker non connecté"))?;
+            docker::unpause_container(docker, &name).await?;
+            tx.send(Event::Containers(docker::list_containers(docker).await?))?;
+        }
+        Command::KillContainer(name) => {
+            let docker = docker.ok_or_else(|| anyhow::anyhow!("Docker non connecté"))?;
+            docker::kill_container(docker, &name).await?;
+            tx.send(Event::Containers(docker::list_containers(docker).await?))?;
+        }
+        Command::ProjectAction { project, action } => {
+            let docker = docker.ok_or_else(|| anyhow::anyhow!("Docker non connecté"))?;
+            docker::project_action(docker, &project, &action).await?;
+            tx.send(Event::Containers(docker::list_containers(docker).await?))?;
+        }
+        Command::InspectContainer(name) => {
+            let docker = docker.ok_or_else(|| anyhow::anyhow!("Docker non connecté"))?;
+            let json = docker::inspect_container(docker, &name).await?;
+            tx.send(Event::Inspect {
+                target: format!("docker:{name}"),
+                json,
+            })?;
+        }
         Command::RemoveContainer(name) => {
             let docker = docker.ok_or_else(|| anyhow::anyhow!("Docker non connecté"))?;
             docker::remove_container(docker, &name).await?;
@@ -68,12 +101,6 @@ pub async fn dispatch(
             let text = docker::container_logs(docker, &name).await?;
             tx.send(Event::Logs { target: name, text })?;
         }
-        Command::RefreshK8s => {
-            let client = kube.ok_or_else(|| anyhow::anyhow!("Kubernetes non connecté"))?;
-            tx.send(Event::Nodes(k8s::list_nodes(client).await?))?;
-            tx.send(Event::Pods(k8s::list_pods(client).await?))?;
-            tx.send(Event::Deployments(k8s::list_deployments(client).await?))?;
-        }
         Command::DeletePod { namespace, name } => {
             let client = kube.ok_or_else(|| anyhow::anyhow!("Kubernetes non connecté"))?;
             k8s::delete_pod(client, &namespace, &name).await?;
@@ -83,10 +110,13 @@ pub async fn dispatch(
             tx.send(Event::ContextsAvailable(k8s::list_contexts()))?;
         }
         Command::PodLogs {
-            namespace, name, ..
+            namespace,
+            name,
+            container,
+            previous,
         } => {
             let client = kube.ok_or_else(|| anyhow::anyhow!("Kubernetes non connecté"))?;
-            let text = k8s::pod_logs(client, &namespace, &name).await?;
+            let text = k8s::pod_logs(client, &namespace, &name, Some(&container), previous).await?;
             tx.send(Event::Logs {
                 target: format!("{namespace}/{name}"),
                 text,
@@ -113,9 +143,19 @@ pub async fn dispatch(
                 text,
             })?;
         }
-        // Géré par la tâche de fond de l'app (mutabilité du client),
+        Command::RefreshK8s => {
+            let client = kube.ok_or_else(|| anyhow::anyhow!("Kubernetes non connecté"))?;
+            tx.send(Event::Nodes(k8s::list_nodes(client).await?))?;
+            tx.send(Event::Pods(k8s::list_pods(client).await?))?;
+            tx.send(Event::Deployments(k8s::list_deployments(client).await?))?;
+            tx.send(Event::Services(k8s::list_services(client).await?))?;
+        }
+        // Géré par la tâche de fond de l'app (mutabilité du client / flux),
         // jamais atteint ici.
         Command::ConnectContext { .. } => {}
+        Command::FollowLogs { .. } => {}
+        Command::FollowStats(_) => {}
+        Command::StopFollow { .. } => {}
     }
     Ok(())
 }

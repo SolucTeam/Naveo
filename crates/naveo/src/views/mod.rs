@@ -1,6 +1,7 @@
 //! Vues de l'application, une par page de la sidebar.
 
 pub mod containers;
+pub mod detail;
 pub mod images;
 pub mod k8s;
 pub mod logs;

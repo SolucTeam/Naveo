@@ -23,6 +23,9 @@ fn main() -> eframe::Result<()> {
     rt.spawn(async move {
         let docker = naveo_core::docker::connect().await.ok();
         let mut k8s = naveo_core::k8s::connect().await.ok();
+        let docker_clone = docker.clone();
+        let mut follows: std::collections::HashMap<String, tokio::task::AbortHandle> =
+            std::collections::HashMap::new();
 
         let _ = evt_tx.send(Event::Connected {
             docker: docker.is_some(),
@@ -45,6 +48,67 @@ fn main() -> eframe::Result<()> {
                             let _ =
                                 evt_tx.send(Event::Error(format!("Connexion à {context} : {e}")));
                         }
+                    }
+                }
+                // Flux en direct (logs/stats) : tâches annulables.
+                Command::FollowLogs { key } => {
+                    if let Some(h) = follows.remove(&key) {
+                        h.abort();
+                    }
+                    let tx2 = evt_tx.clone();
+                    let key2 = key.clone();
+                    let docker2 = docker_clone.clone();
+                    let k8s2 = k8s.clone();
+                    let handle = tokio::spawn(async move {
+                        let _ = if let Some(name) = key2.strip_prefix("docker:") {
+                            match docker2 {
+                                Some(d) => {
+                                    naveo_core::docker::stream_logs(&d, name, &key2, tx2).await
+                                }
+                                None => Ok(()),
+                            }
+                        } else if let Some(rest) = key2.strip_prefix("k8s:") {
+                            match k8s2.map(|(c, _)| c) {
+                                Some(client) => {
+                                    // clé : k8s:<ns>/<name>[/<container>]
+                                    let mut parts = rest.splitn(3, '/');
+                                    let ns = parts.next().unwrap_or_default().to_string();
+                                    let pod = parts.next().unwrap_or_default().to_string();
+                                    let container = parts.next().map(|s| s.to_string());
+                                    naveo_core::k8s::stream_pod_logs(
+                                        &client,
+                                        &ns,
+                                        &pod,
+                                        container.as_deref(),
+                                        &key2,
+                                        tx2,
+                                    )
+                                    .await
+                                }
+                                None => Ok(()),
+                            }
+                        } else {
+                            Ok(())
+                        };
+                    });
+                    follows.insert(key, handle.abort_handle());
+                }
+                Command::FollowStats(name) => {
+                    let key = format!("stats:{name}");
+                    if let Some(h) = follows.remove(&key) {
+                        h.abort();
+                    }
+                    if let Some(d) = docker_clone.clone() {
+                        let tx2 = evt_tx.clone();
+                        let handle = tokio::spawn(async move {
+                            naveo_core::docker::stream_stats(&d, &name, tx2).await
+                        });
+                        follows.insert(key, handle.abort_handle());
+                    }
+                }
+                Command::StopFollow { key } => {
+                    if let Some(h) = follows.remove(&key) {
+                        h.abort();
                     }
                 }
                 other => match naveo_core::dispatch(

@@ -1,11 +1,12 @@
-//! Vue Conteneurs — groupés par projet Compose.
+//! Vue Conteneurs — groupés par projet Compose, avec actions projet
+//! et actions par conteneur.
 
 use std::collections::BTreeMap;
 
 use eframe::egui;
 use naveo_core::{Command, ContainerInfo};
 
-use crate::app::NaveoApp;
+use crate::app::{NaveoApp, Page};
 use crate::theme;
 use crate::views::page_header;
 
@@ -55,13 +56,60 @@ pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
         for (group, list) in groups {
             theme::card(ui, &p, |ui| {
                 let running = list.iter().filter(|c| c.state == "running").count();
-                let header = format!("🗂 {}   ·   {}/{} actif(s)", group, running, list.len());
+                let header = format!("🗂 {group}   ·   {}/{} actif(s)", running, list.len());
 
                 egui::CollapsingHeader::new(egui::RichText::new(header).strong())
                     .default_open(true)
                     .show(ui, |ui| {
+                        // Actions sur tout le projet Compose.
+                        if group != "sans projet" {
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .button("▶ projet")
+                                    .on_hover_text("Démarrer tout le projet")
+                                    .clicked()
+                                {
+                                    app.send(Command::ProjectAction {
+                                        project: group.clone(),
+                                        action: "start".into(),
+                                    });
+                                }
+                                if ui
+                                    .button("⏹ projet")
+                                    .on_hover_text("Arrêter tout le projet")
+                                    .clicked()
+                                {
+                                    app.send(Command::ProjectAction {
+                                        project: group.clone(),
+                                        action: "stop".into(),
+                                    });
+                                }
+                                if ui
+                                    .button("🔄 projet")
+                                    .on_hover_text("Redémarrer tout le projet")
+                                    .clicked()
+                                {
+                                    app.send(Command::ProjectAction {
+                                        project: group.clone(),
+                                        action: "restart".into(),
+                                    });
+                                }
+                                if ui
+                                    .button("🗑 projet")
+                                    .on_hover_text("Supprimer tous les conteneurs du projet")
+                                    .clicked()
+                                {
+                                    app.send(Command::ProjectAction {
+                                        project: group.clone(),
+                                        action: "remove".into(),
+                                    });
+                                }
+                            });
+                        }
+                        ui.add_space(2.0);
+
                         egui::Grid::new(format!("grid-{group}"))
-                            .num_columns(5)
+                            .num_columns(6)
                             .spacing([16.0, 6.0])
                             .striped(true)
                             .show(ui, |ui| {
@@ -80,10 +128,12 @@ fn container_row(app: &mut NaveoApp, ui: &mut egui::Ui, c: &ContainerInfo) {
     let p = app.palette;
     let color = theme::state_color(&p, &c.state);
 
-    // Statut + nom
+    // Statut + nom (cliquable : ouvre le détail)
     ui.horizontal(|ui| {
         ui.colored_label(color, "●");
-        ui.label(egui::RichText::new(&c.name).strong());
+        if ui.link(egui::RichText::new(&c.name).strong()).clicked() {
+            app.page = Page::ContainerDetail(c.name.clone());
+        }
     });
 
     // Image
@@ -102,18 +152,42 @@ fn container_row(app: &mut NaveoApp, ui: &mut egui::Ui, c: &ContainerInfo) {
     // Actions
     ui.horizontal(|ui| {
         let running = c.state == "running";
+        let paused = c.state == "paused";
+
         if ui.add_enabled(!running, egui::Button::new("▶")).clicked() {
             app.send(Command::StartContainer(c.name.clone()));
         }
         if ui.add_enabled(running, egui::Button::new("⏹")).clicked() {
             app.send(Command::StopContainer(c.name.clone()));
         }
-        if ui.button("📜").on_hover_text("Logs").clicked() {
-            app.send(Command::ContainerLogs(c.name.clone()));
+        if ui
+            .add_enabled(running, egui::Button::new("🔄"))
+            .on_hover_text("Redémarrer")
+            .clicked()
+        {
+            app.send(Command::RestartContainer(c.name.clone()));
+        }
+        if paused {
+            if ui.button("▷").on_hover_text("Reprendre").clicked() {
+                app.send(Command::UnpauseContainer(c.name.clone()));
+            }
+        } else if ui
+            .add_enabled(running, egui::Button::new("⏸"))
+            .on_hover_text("Pause")
+            .clicked()
+        {
+            app.send(Command::PauseContainer(c.name.clone()));
+        }
+        if ui
+            .button("📜")
+            .on_hover_text("Détail + logs live")
+            .clicked()
+        {
+            app.page = Page::ContainerDetail(c.name.clone());
         }
         if ui.button("⌨").on_hover_text("Terminal").clicked() {
             app.exec_target = Some(format!("docker:{}", c.name));
-            app.page = crate::app::Page::Terminal;
+            app.page = Page::Terminal;
         }
         if ui.button("🗑").on_hover_text("Supprimer").clicked() {
             app.send(Command::RemoveContainer(c.name.clone()));

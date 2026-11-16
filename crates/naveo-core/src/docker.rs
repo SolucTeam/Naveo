@@ -1,13 +1,14 @@
 //! Client Docker (via bollard) : listes, actions et logs.
 
 use anyhow::Result;
-use bollard::container::{LogOutput, LogsOptions, RemoveContainerOptions};
+use bollard::container::{LogOutput, LogsOptions, RemoveContainerOptions, StatsOptions};
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::image::RemoveImageOptions;
 use bollard::Docker;
+use crossbeam_channel::Sender;
 use futures::{StreamExt, TryStreamExt};
 
-use crate::events::{ContainerInfo, ImageInfo, NetworkInfo, VolumeInfo};
+use crate::events::{ContainerInfo, Event, ImageInfo, NetworkInfo, StatsInfo, VolumeInfo};
 
 fn port_type(t: Option<bollard::models::PortTypeEnum>) -> &'static str {
     match t {
@@ -138,6 +139,176 @@ pub async fn stop_container(docker: &Docker, name: &str) -> Result<()> {
     docker
         .stop_container(name, None::<bollard::container::StopContainerOptions>)
         .await?;
+    Ok(())
+}
+
+pub async fn restart_container(docker: &Docker, name: &str) -> Result<()> {
+    docker
+        .restart_container(name, None::<bollard::container::RestartContainerOptions>)
+        .await?;
+    Ok(())
+}
+
+pub async fn pause_container(docker: &Docker, name: &str) -> Result<()> {
+    docker.pause_container(name).await?;
+    Ok(())
+}
+
+pub async fn unpause_container(docker: &Docker, name: &str) -> Result<()> {
+    docker.unpause_container(name).await?;
+    Ok(())
+}
+
+pub async fn kill_container(docker: &Docker, name: &str) -> Result<()> {
+    docker
+        .kill_container(
+            name,
+            None::<bollard::container::KillContainerOptions<String>>,
+        )
+        .await?;
+    Ok(())
+}
+
+/// Applique une action à tous les conteneurs d'un projet Compose.
+pub async fn project_action(docker: &Docker, project: &str, action: &str) -> Result<()> {
+    let opts = bollard::container::ListContainersOptions::<String> {
+        all: true,
+        ..Default::default()
+    };
+    let list = docker.list_containers(Some(opts)).await?;
+
+    for c in list {
+        let in_project = c
+            .labels
+            .as_ref()
+            .and_then(|l| l.get("com.docker.compose.project"))
+            .is_some_and(|p| p == project);
+        if !in_project {
+            continue;
+        }
+        let Some(name) = c.names.unwrap_or_default().first().cloned() else {
+            continue;
+        };
+        let name = name.trim_start_matches('/').to_string();
+        match action {
+            "start" => start_container(docker, &name).await?,
+            "stop" => stop_container(docker, &name).await?,
+            "restart" => restart_container(docker, &name).await?,
+            "remove" => remove_container(docker, &name).await?,
+            _ => anyhow::bail!("action inconnue : {action}"),
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Détail : inspect, stats, logs en direct
+// ---------------------------------------------------------------------------
+
+/// Renvoie le JSON d'inspection du conteneur, indenté pour l'affichage.
+pub async fn inspect_container(docker: &Docker, name: &str) -> Result<String> {
+    let inspect = docker.inspect_container(name, None).await?;
+    Ok(serde_json::to_string_pretty(&inspect)?)
+}
+
+/// Suit les logs d'un conteneur en direct et pousse chaque morceau
+/// sur le canal d'événements. Termine quand le flux s'arrête
+/// (conteneur supprimé, StopFollow…).
+pub async fn stream_logs(docker: &Docker, name: &str, key: &str, tx: Sender<Event>) -> Result<()> {
+    let opts = LogsOptions::<String> {
+        stdout: true,
+        stderr: true,
+        tail: "200".into(),
+        timestamps: false,
+        follow: true,
+        since: 0,
+        until: 0,
+    };
+
+    let mut stream = docker.logs(name, Some(opts));
+    while let Some(chunk) = stream.next().await {
+        let Ok(chunk) = chunk else { break };
+        let bytes: &[u8] = match &chunk {
+            LogOutput::StdOut { message } => message,
+            LogOutput::StdErr { message } => message,
+            LogOutput::StdIn { message } => message,
+            LogOutput::Console { message } => message,
+        };
+        let text = String::from_utf8_lossy(bytes).to_string();
+        if tx
+            .send(Event::LogChunk {
+                target: key.into(),
+                text,
+            })
+            .is_err()
+        {
+            break; // l'UI est fermée
+        }
+    }
+    Ok(())
+}
+
+/// Suit les stats d'un conteneur (CPU, mémoire, réseau) en direct.
+pub async fn stream_stats(docker: &Docker, name: &str, tx: Sender<Event>) -> Result<()> {
+    let opts = StatsOptions {
+        stream: true,
+        one_shot: false,
+    };
+
+    let mut stream = docker.stats(name, Some(opts));
+    while let Some(stats) = stream.next().await {
+        let Ok(stats) = stats else { break };
+
+        // Formule du CPU telle que la CLI Docker la calcule.
+        let cpu_delta = stats
+            .cpu_stats
+            .cpu_usage
+            .total_usage
+            .saturating_sub(stats.precpu_stats.cpu_usage.total_usage);
+        let system_delta = stats
+            .cpu_stats
+            .system_cpu_usage
+            .unwrap_or(0)
+            .saturating_sub(stats.precpu_stats.system_cpu_usage.unwrap_or(0));
+        let cpus = stats.cpu_stats.online_cpus.unwrap_or(1).max(1) as f64;
+        let cpu_percent = if system_delta > 0 {
+            (cpu_delta as f64 / system_delta as f64) * cpus * 100.0
+        } else {
+            0.0
+        };
+
+        let mem_used = stats.memory_stats.usage.unwrap_or(0);
+        let mem_limit = stats.memory_stats.limit.unwrap_or(0);
+        let mem_percent = if mem_limit > 0 {
+            mem_used as f64 / mem_limit as f64 * 100.0
+        } else {
+            0.0
+        };
+
+        let (mut rx, mut tx_bytes) = (0u64, 0u64);
+        for net in stats.networks.unwrap_or_default().values() {
+            rx += net.rx_bytes;
+            tx_bytes += net.tx_bytes;
+        }
+
+        let info = StatsInfo {
+            cpu_percent,
+            mem_used_bytes: mem_used,
+            mem_limit_bytes: mem_limit,
+            mem_percent,
+            net_rx_bytes: rx,
+            net_tx_bytes: tx_bytes,
+        };
+        if tx
+            .send(Event::Stats {
+                name: name.into(),
+                info,
+            })
+            .is_err()
+        {
+            break;
+        }
+    }
     Ok(())
 }
 
