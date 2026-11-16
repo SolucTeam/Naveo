@@ -20,13 +20,39 @@ pub enum Page {
     Pods,
     Services,
     Deploiements,
+    StatefulSets,
+    DaemonSets,
+    ReplicaSets,
+    Jobs,
+    CronJobs,
     Evenements,
     ConfigMaps,
     Secrets,
     Ingress,
+    Endpoints,
     Stockage,
+    PVs,
+    StorageClasses,
+    ServiceAccounts,
+    Roles,
+    ClusterRoles,
+    Bindings,
+    Namespaces,
     /// Page détail d'un conteneur Docker (logs live, stats, inspect, fichiers).
     ContainerDetail(String),
+    /// Fiche détaillée d'un pod (conditions, volumes, probes…).
+    PodDetail {
+        namespace: String,
+        name: String,
+    },
+    /// Éditeur YAML d'une ressource existante.
+    YamlEditor {
+        kind: String,
+        namespace: String,
+        name: String,
+    },
+    /// Création d'une ressource depuis un YAML collé.
+    YamlCreate,
     Terminal,
     Journal,
     Parametres,
@@ -111,6 +137,24 @@ pub struct NaveoApp {
     // Événements Kubernetes + ressources génériques
     pub(crate) k8s_events: Vec<naveo_core::K8sEventInfo>,
     pub(crate) resources: HashMap<String, Vec<naveo_core::ResourceInfo>>,
+
+    // Workloads (statefulsets, daemonsets, replicasets, jobs, cronjobs)
+    pub(crate) workloads: HashMap<String, Vec<naveo_core::WorkloadInfo>>,
+
+    // Fiche pod détaillée
+    pub(crate) pod_detail: Option<naveo_core::PodDetailInfo>,
+
+    // Métriques metrics-server (« ns/name » ou nom de nœud → (milliCPU, octets))
+    pub(crate) pod_metrics: HashMap<String, (u64, u64)>,
+    pub(crate) node_metrics: HashMap<String, (u64, u64)>,
+
+    // Sélection multiple de pods (actions en masse K8s)
+    pub(crate) sel_pods: HashSet<String>,
+
+    // Éditeur YAML
+    /// Clé de la dernière version chargée (évite les rechargements en boucle).
+    pub(crate) yaml_loaded_key: String,
+    pub(crate) yaml_text: String,
 
     // Port-forwards actifs
     pub(crate) forwards: Vec<ForwardInfo>,
@@ -234,6 +278,13 @@ impl NaveoApp {
             prev_page: None,
             k8s_events: Vec::new(),
             resources: HashMap::new(),
+            workloads: HashMap::new(),
+            pod_detail: None,
+            pod_metrics: HashMap::new(),
+            node_metrics: HashMap::new(),
+            sel_pods: HashSet::new(),
+            yaml_loaded_key: String::new(),
+            yaml_text: String::new(),
             forwards: Vec::new(),
             pf_ns: String::new(),
             pf_pod: String::new(),
@@ -298,6 +349,32 @@ impl NaveoApp {
         self.send(naveo_core::Command::RefreshImages);
         if self.k8s_ok {
             self.send(naveo_core::Command::RefreshK8s);
+            // Recharge les données de la page courante (workloads,
+            // ressources en lecture, métriques).
+            let workload = workload_page_kind(&self.page);
+            if let Some(kind) = workload {
+                self.send(naveo_core::Command::LoadWorkloads { kind: kind.into() });
+            }
+            if let Some(kind) = resource_page_kind(&self.page) {
+                for k in kind {
+                    self.send(naveo_core::Command::LoadResources {
+                        kind: (*k).to_string(),
+                    });
+                }
+            }
+            match &self.page {
+                Page::Noeuds | Page::Pods => {
+                    self.send(naveo_core::Command::LoadMetrics);
+                }
+                Page::PodDetail { namespace, name } => {
+                    self.send(naveo_core::Command::LoadMetrics);
+                    self.send(naveo_core::Command::LoadPodDetail {
+                        namespace: namespace.clone(),
+                        name: name.clone(),
+                    });
+                }
+                _ => {}
+            }
         }
     }
 
@@ -421,6 +498,24 @@ impl NaveoApp {
                 Event::Resources { kind, items } => {
                     self.resources.insert(kind, items);
                 }
+                Event::Workloads { kind, items } => {
+                    self.workloads.insert(kind, items);
+                }
+                Event::PodDetail(detail) => self.pod_detail = Some(*detail),
+                Event::ResourceYaml { key, yaml } => {
+                    self.yaml_loaded_key = key;
+                    self.yaml_text = yaml;
+                }
+                Event::Metrics { pods, nodes } => {
+                    self.pod_metrics = pods
+                        .into_iter()
+                        .map(|m| (m.key, (m.cpu_millis, m.mem_bytes)))
+                        .collect();
+                    self.node_metrics = nodes
+                        .into_iter()
+                        .map(|m| (m.name, (m.cpu_millis, m.mem_bytes)))
+                        .collect();
+                }
                 Event::PortForwardActive {
                     key,
                     namespace,
@@ -513,6 +608,91 @@ impl eframe::App for NaveoApp {
                         kind: "pvcs".into(),
                     });
                 }
+                Page::Endpoints if !self.resources.contains_key("endpoints") => {
+                    self.send(naveo_core::Command::LoadResources {
+                        kind: "endpoints".into(),
+                    });
+                }
+                Page::PVs if !self.resources.contains_key("pvs") => {
+                    self.send(naveo_core::Command::LoadResources { kind: "pvs".into() });
+                }
+                Page::StorageClasses if !self.resources.contains_key("storageclasses") => {
+                    self.send(naveo_core::Command::LoadResources {
+                        kind: "storageclasses".into(),
+                    });
+                }
+                Page::ServiceAccounts if !self.resources.contains_key("serviceaccounts") => {
+                    self.send(naveo_core::Command::LoadResources {
+                        kind: "serviceaccounts".into(),
+                    });
+                }
+                Page::Roles if !self.resources.contains_key("roles") => {
+                    self.send(naveo_core::Command::LoadResources {
+                        kind: "roles".into(),
+                    });
+                }
+                Page::ClusterRoles if !self.resources.contains_key("clusterroles") => {
+                    self.send(naveo_core::Command::LoadResources {
+                        kind: "clusterroles".into(),
+                    });
+                }
+                Page::Bindings => {
+                    if !self.resources.contains_key("rolebindings") {
+                        self.send(naveo_core::Command::LoadResources {
+                            kind: "rolebindings".into(),
+                        });
+                    }
+                    if !self.resources.contains_key("clusterrolebindings") {
+                        self.send(naveo_core::Command::LoadResources {
+                            kind: "clusterrolebindings".into(),
+                        });
+                    }
+                }
+                Page::Namespaces if !self.resources.contains_key("namespaces") => {
+                    self.send(naveo_core::Command::LoadResources {
+                        kind: "namespaces".into(),
+                    });
+                }
+                Page::StatefulSets => self.send(naveo_core::Command::LoadWorkloads {
+                    kind: "statefulsets".into(),
+                }),
+                Page::DaemonSets => self.send(naveo_core::Command::LoadWorkloads {
+                    kind: "daemonsets".into(),
+                }),
+                Page::ReplicaSets => self.send(naveo_core::Command::LoadWorkloads {
+                    kind: "replicasets".into(),
+                }),
+                Page::Jobs => self.send(naveo_core::Command::LoadWorkloads {
+                    kind: "jobs".into(),
+                }),
+                Page::CronJobs => self.send(naveo_core::Command::LoadWorkloads {
+                    kind: "cronjobs".into(),
+                }),
+                Page::PodDetail { namespace, name } => {
+                    self.pod_detail = None;
+                    self.send(naveo_core::Command::LoadPodDetail {
+                        namespace: namespace.clone(),
+                        name: name.clone(),
+                    });
+                    self.send(naveo_core::Command::LoadMetrics);
+                }
+                Page::YamlEditor {
+                    kind,
+                    namespace,
+                    name,
+                } => {
+                    let key = format!("{kind}/{namespace}/{name}");
+                    if self.yaml_loaded_key != key {
+                        self.send(naveo_core::Command::GetResourceYaml {
+                            kind: kind.clone(),
+                            namespace: namespace.clone(),
+                            name: name.clone(),
+                        });
+                    }
+                }
+                Page::YamlCreate if self.yaml_text.is_empty() => {
+                    self.yaml_text = "# Colle ici le YAML de la ressource à créer.\n# apiVersion et metadata.name sont requis.\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: ma-config\n  namespace: default\ndata:\n  cle: valeur\n".into();
+                }
                 _ => {}
             }
             self.prev_page = Some(self.page.clone());
@@ -543,13 +723,35 @@ impl eframe::App for NaveoApp {
                 Page::Reseaux => views::networks::show(self, ui),
                 Page::Noeuds => views::k8s::nodes(self, ui),
                 Page::Pods => views::k8s::pods(self, ui),
+                Page::PodDetail { namespace, name } => {
+                    views::k8s::pod_detail(self, ui, &namespace, &name)
+                }
                 Page::Services => views::k8s::services(self, ui),
                 Page::Deploiements => views::k8s::deployments(self, ui),
+                Page::StatefulSets => views::k8s::workloads(self, ui, "statefulsets"),
+                Page::DaemonSets => views::k8s::workloads(self, ui, "daemonsets"),
+                Page::ReplicaSets => views::k8s::workloads(self, ui, "replicasets"),
+                Page::Jobs => views::k8s::workloads(self, ui, "jobs"),
+                Page::CronJobs => views::k8s::workloads(self, ui, "cronjobs"),
                 Page::Evenements => views::k8s::events(self, ui),
                 Page::ConfigMaps => views::k8s::resources(self, ui, "configmaps"),
                 Page::Secrets => views::k8s::resources(self, ui, "secrets"),
                 Page::Ingress => views::k8s::resources(self, ui, "ingresses"),
+                Page::Endpoints => views::k8s::resources(self, ui, "endpoints"),
                 Page::Stockage => views::k8s::resources(self, ui, "pvcs"),
+                Page::PVs => views::k8s::resources(self, ui, "pvs"),
+                Page::StorageClasses => views::k8s::resources(self, ui, "storageclasses"),
+                Page::ServiceAccounts => views::k8s::resources(self, ui, "serviceaccounts"),
+                Page::Roles => views::k8s::resources(self, ui, "roles"),
+                Page::ClusterRoles => views::k8s::resources(self, ui, "clusterroles"),
+                Page::Bindings => views::k8s::bindings(self, ui),
+                Page::Namespaces => views::k8s::resources(self, ui, "namespaces"),
+                Page::YamlEditor {
+                    kind,
+                    namespace,
+                    name,
+                } => views::k8s::yaml_editor(self, ui, &kind, &namespace, &name),
+                Page::YamlCreate => views::k8s::yaml_create(self, ui),
                 Page::ContainerDetail(name) => views::detail::show(self, ui, &name),
                 Page::Terminal => views::terminal::show(self, ui),
                 Page::Journal => views::logs::show(self, ui),
@@ -637,15 +839,69 @@ impl NaveoApp {
                         .strong(),
                 );
                 ui.add_space(2.0);
-                self.nav_item(ui, "🖥", "Nœuds", Page::Noeuds);
-                self.nav_item(ui, "🫧", "Pods", Page::Pods);
-                self.nav_item(ui, "🔌", "Services", Page::Services);
-                self.nav_item(ui, "🚀", "Déploiements", Page::Deploiements);
-                self.nav_item(ui, "⚡", "Événements", Page::Evenements);
-                self.nav_item(ui, "🗂", "ConfigMaps", Page::ConfigMaps);
-                self.nav_item(ui, "🔑", "Secrets", Page::Secrets);
-                self.nav_item(ui, "🌐", "Ingress", Page::Ingress);
-                self.nav_item(ui, "🗄", "Stockage", Page::Stockage);
+
+                // Groupes repliables (style Kiri) : workloads, réseau,
+                // config, stockage, RBAC, cluster.
+                egui::CollapsingHeader::new(
+                    egui::RichText::new("⚡ Charge de travail")
+                        .size(12.0)
+                        .strong(),
+                )
+                .id_salt("nav-workloads")
+                .default_open(true)
+                .show(ui, |ui| {
+                    self.nav_item(ui, "🫧", "Pods", Page::Pods);
+                    self.nav_item(ui, "🚀", "Déploiements", Page::Deploiements);
+                    self.nav_item(ui, "🔁", "StatefulSets", Page::StatefulSets);
+                    self.nav_item(ui, "👾", "DaemonSets", Page::DaemonSets);
+                    self.nav_item(ui, "🌱", "ReplicaSets", Page::ReplicaSets);
+                    self.nav_item(ui, "📦", "Jobs", Page::Jobs);
+                    self.nav_item(ui, "⏰", "CronJobs", Page::CronJobs);
+                });
+                egui::CollapsingHeader::new(egui::RichText::new("🌐 Réseau").size(12.0).strong())
+                    .id_salt("nav-reseau")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        self.nav_item(ui, "🔌", "Services", Page::Services);
+                        self.nav_item(ui, "🌍", "Ingress", Page::Ingress);
+                        self.nav_item(ui, "🎯", "Endpoints", Page::Endpoints);
+                    });
+                egui::CollapsingHeader::new(
+                    egui::RichText::new("🗂 Configuration").size(12.0).strong(),
+                )
+                .id_salt("nav-config")
+                .default_open(true)
+                .show(ui, |ui| {
+                    self.nav_item(ui, "🗂", "ConfigMaps", Page::ConfigMaps);
+                    self.nav_item(ui, "🔑", "Secrets", Page::Secrets);
+                    self.nav_item(ui, "👤", "ServiceAccounts", Page::ServiceAccounts);
+                });
+                egui::CollapsingHeader::new(egui::RichText::new("🗄 Stockage").size(12.0).strong())
+                    .id_salt("nav-stockage")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        self.nav_item(ui, "💾", "PVC", Page::Stockage);
+                        self.nav_item(ui, "📀", "Volumes (PV)", Page::PVs);
+                        self.nav_item(ui, "🏷", "StorageClasses", Page::StorageClasses);
+                    });
+                egui::CollapsingHeader::new(egui::RichText::new("🛡 RBAC").size(12.0).strong())
+                    .id_salt("nav-rbac")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        self.nav_item(ui, "🗝", "Rôles", Page::Roles);
+                        self.nav_item(ui, "👑", "ClusterRoles", Page::ClusterRoles);
+                        self.nav_item(ui, "🔗", "Bindings", Page::Bindings);
+                    });
+                egui::CollapsingHeader::new(egui::RichText::new("🖥 Cluster").size(12.0).strong())
+                    .id_salt("nav-cluster")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        self.nav_item(ui, "🖥", "Nœuds", Page::Noeuds);
+                        self.nav_item(ui, "⚡", "Événements", Page::Evenements);
+                        self.nav_item(ui, "🏷", "Namespaces", Page::Namespaces);
+                    });
+                ui.add_space(6.0);
+                self.nav_item(ui, "📝", "Éditeur YAML", Page::YamlCreate);
 
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     ui.add_space(8.0);
@@ -758,6 +1014,38 @@ fn status_chip(ui: &mut egui::Ui, p: Palette, label: &str, ok: bool) {
                 ui.label(egui::RichText::new(label).size(12.0));
             });
         });
+}
+
+/// Type de workload associé à une page (pour le rafraîchissement auto).
+fn workload_page_kind(page: &Page) -> Option<&'static str> {
+    match page {
+        Page::StatefulSets => Some("statefulsets"),
+        Page::DaemonSets => Some("daemonsets"),
+        Page::ReplicaSets => Some("replicasets"),
+        Page::Jobs => Some("jobs"),
+        Page::CronJobs => Some("cronjobs"),
+        _ => None,
+    }
+}
+
+/// Types de ressources en lecture associés à une page.
+/// (« Bindings » regroupe rolebindings + clusterrolebindings.)
+fn resource_page_kind(page: &Page) -> Option<&'static [&'static str]> {
+    match page {
+        Page::ConfigMaps => Some(&["configmaps"]),
+        Page::Secrets => Some(&["secrets"]),
+        Page::Ingress => Some(&["ingresses"]),
+        Page::Endpoints => Some(&["endpoints"]),
+        Page::Stockage => Some(&["pvcs"]),
+        Page::PVs => Some(&["pvs"]),
+        Page::StorageClasses => Some(&["storageclasses"]),
+        Page::ServiceAccounts => Some(&["serviceaccounts"]),
+        Page::Roles => Some(&["roles"]),
+        Page::ClusterRoles => Some(&["clusterroles"]),
+        Page::Bindings => Some(&["rolebindings", "clusterrolebindings"]),
+        Page::Namespaces => Some(&["namespaces"]),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -183,6 +183,58 @@ pub enum Command {
         key: String,
     },
 
+    // Workloads Kubernetes (StatefulSet, DaemonSet, ReplicaSet, Job, CronJob)
+    /// Liste un type de workload : statefulsets|daemonsets|replicasets|jobs|cronjobs.
+    LoadWorkloads {
+        kind: String,
+    },
+    /// Supprime un workload (kind = statefulsets|daemonsets|replicasets|jobs|cronjobs).
+    DeleteWorkload {
+        kind: String,
+        namespace: String,
+        name: String,
+    },
+    /// Change les réplicas d'un workload scalables (statefulsets, replicasets).
+    ScaleWorkload {
+        kind: String,
+        namespace: String,
+        name: String,
+        replicas: i32,
+    },
+    /// Rollout restart d'un workload (statefulsets, daemonsets).
+    RolloutRestartWorkload {
+        kind: String,
+        namespace: String,
+        name: String,
+    },
+
+    // Pod détail + actions en masse
+    /// Charge la fiche complète d'un pod (conditions, volumes, probes…).
+    LoadPodDetail {
+        namespace: String,
+        name: String,
+    },
+    /// Supprime plusieurs pods (namespace, name).
+    DeletePods {
+        pods: Vec<(String, String)>,
+    },
+
+    // YAML : voir / éditer / appliquer
+    /// Récupère le YAML d'une ressource (clé « Kind/ns/name »).
+    GetResourceYaml {
+        kind: String,
+        namespace: String,
+        name: String,
+    },
+    /// Applique un YAML complet (création ou mise à jour).
+    ApplyYaml {
+        yaml: String,
+    },
+
+    // Métriques metrics-server
+    /// Charge CPU/mémoire des pods et nœuds (metrics.k8s.io).
+    LoadMetrics,
+
     // Exécution de commandes (terminal)
     /// Lance une commande dans un conteneur Docker (`sh -c <cmd>`).
     ExecContainer {
@@ -300,6 +352,23 @@ pub enum Event {
     },
     /// Notification générique (succès d'une opération…).
     Notice(String),
+    /// Liste de workloads d'un type (statefulsets, jobs…).
+    Workloads {
+        kind: String,
+        items: Vec<WorkloadInfo>,
+    },
+    /// Fiche détaillée d'un pod.
+    PodDetail(Box<PodDetailInfo>),
+    /// YAML d'une ressource.
+    ResourceYaml {
+        key: String,
+        yaml: String,
+    },
+    /// Métriques metrics-server (pods : « ns/name » → (milliCPU, octets)).
+    Metrics {
+        pods: Vec<PodMetricsInfo>,
+        nodes: Vec<NodeMetricsInfo>,
+    },
     Error(String),
 }
 
@@ -485,4 +554,109 @@ pub struct ResourceInfo {
     pub summary: String,
     /// Âge lisible (« 3 d », « 2 h »…).
     pub age: String,
+}
+
+/// Workload Kubernetes (StatefulSet, DaemonSet, ReplicaSet, Job, CronJob).
+#[derive(Debug, Clone, Default)]
+pub struct WorkloadInfo {
+    /// StatefulSet | DaemonSet | ReplicaSet | Job | CronJob
+    pub kind: String,
+    pub name: String,
+    pub namespace: String,
+    pub replicas_ready: i32,
+    pub replicas_desired: i32,
+    pub image: String,
+    /// Info spécifique : planning d'un CronJob, suspensions…
+    pub summary: String,
+    pub age: String,
+}
+
+/// Condition d'un pod (type, statut, raison, message).
+#[derive(Debug, Clone, Default)]
+pub struct ConditionInfo {
+    pub type_: String,
+    pub status: String,
+    pub reason: String,
+    pub message: String,
+}
+
+/// Toleration d'un pod.
+#[derive(Debug, Clone, Default)]
+pub struct TolerationInfo {
+    pub key: String,
+    pub operator: String,
+    pub value: String,
+    pub effect: String,
+}
+
+/// Volume monté dans un pod.
+#[derive(Debug, Clone, Default)]
+pub struct PodVolumeInfo {
+    pub name: String,
+    /// configMap | secret | pvc | hostPath | emptyDir | projected…
+    pub type_: String,
+    /// Détail (nom de la ConfigMap, claim, chemin hôte…).
+    pub detail: String,
+}
+
+/// Détail d'un conteneur au sein d'une fiche pod.
+#[derive(Debug, Clone, Default)]
+pub struct PodContainerDetail {
+    pub name: String,
+    pub image: String,
+    pub ready: bool,
+    pub restarts: i32,
+    /// running | waiting | terminated
+    pub state: String,
+    pub reason: String,
+    /// Variables d'environnement (valeurs littérales ; les références
+    /// ConfigMap/Secret sont affichées sous forme « ← configMap/cm:key »).
+    pub env: Vec<(String, String)>,
+    pub requests: Vec<(String, String)>,
+    pub limits: Vec<(String, String)>,
+    /// Probes formatées (« liveness : httpGet /healthz:8080 »).
+    pub probes: Vec<String>,
+    /// Montages (« /var/log ← config:ma-config »).
+    pub mounts: Vec<String>,
+}
+
+/// Fiche détaillée d'un pod (niveau Headlamp).
+#[derive(Debug, Clone, Default)]
+pub struct PodDetailInfo {
+    pub name: String,
+    pub namespace: String,
+    pub phase: String,
+    pub qos: String,
+    pub service_account: String,
+    pub node: String,
+    pub pod_ip: String,
+    pub priority: String,
+    pub owner_kind: String,
+    pub owner_name: String,
+    pub labels: Vec<(String, String)>,
+    pub annotations: Vec<(String, String)>,
+    pub node_selector: Vec<(String, String)>,
+    pub conditions: Vec<ConditionInfo>,
+    pub tolerations: Vec<TolerationInfo>,
+    pub volumes: Vec<PodVolumeInfo>,
+    pub containers: Vec<PodContainerDetail>,
+}
+
+/// Relevé metrics-server d'un pod.
+#[derive(Debug, Clone, Default)]
+pub struct PodMetricsInfo {
+    /// Clé « ns/name ».
+    pub key: String,
+    /// Milli-CPU (1000 = 1 vCPU).
+    pub cpu_millis: u64,
+    /// Octets.
+    pub mem_bytes: u64,
+}
+
+/// Relevé metrics-server d'un nœud.
+#[derive(Debug, Clone, Default)]
+pub struct NodeMetricsInfo {
+    pub name: String,
+    pub cpu_millis: u64,
+    pub mem_bytes: u64,
 }

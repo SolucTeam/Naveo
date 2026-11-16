@@ -31,9 +31,14 @@ Naveo est une application desktop **100 % Rust** (pas d'Electron, pas de navigat
 
 ### Kubernetes
 - ✅ **Multi-cluster** : détection automatique de tous les kubeconfigs de `~/.kube/` et de `$KUBECONFIG`, sélecteur de cluster dans la barre du haut, import de kubeconfig 📁
-- ✅ Nœuds : état Ready, version kubelet, IP, rôles, ressources allocables
-- ✅ Pods : namespace, phase, redémarrages, conteneurs, logs, suppression
-- ✅ Déploiements : réplicas prêts/souhaités, image
+- ✅ Nœuds : état Ready, version kubelet, IP, rôles, ressources allocables, utilisation CPU/mémoire (metrics-server)
+- ✅ Pods : namespace, phase, redémarrages, conteneurs, logs, suppression, sélection multiple
+- ✅ **Fiche pod** : conditions, tolérances, volumes, env, sondes, requests/limits, montages, propriétaire cliquable
+- ✅ Déploiements : réplicas prêts/souhaités, image, scale ±, rollout restart
+- ✅ **Workloads** : StatefulSets, DaemonSets, ReplicaSets, Jobs, CronJobs (scale, rollout restart, suppression)
+- ✅ **Éditeur YAML** : voir / éditer n'importe quelle ressource, créer depuis un manifeste collé (apply)
+- ✅ **Lecture** : Services, Ingress, Endpoints, ConfigMaps, Secrets, PVC/PV/StorageClasses, ServiceAccounts, Namespaces, RBAC (Rôles, ClusterRoles, Bindings)
+- ✅ **Métriques** : CPU/mémoire des pods et nœuds via metrics-server (si installé)
 - ✅ **Terminal** : `sh -c <cmd>` dans un conteneur ou un pod
 
 ### Interface
@@ -104,8 +109,17 @@ et affiche l'état des connexions ; les pages concernées restent désactivées.
 - [x] ~~Kubernetes : vue Événements, scale + rollout restart des déploiements~~
 - [x] ~~Kubernetes : port-forward local → pod, ConfigMaps / Secrets / Ingress / PVC~~
 - [x] ~~Préférences persistées (thème), thème système, tri de colonnes, copier au presse-papier~~
+- [x] ~~Kubernetes : StatefulSets / DaemonSets / ReplicaSets / Jobs / CronJobs (scale, rollout restart, suppression)~~
+- [x] ~~Kubernetes : fiche détaillée du pod (conditions, tolerations, volumes, env, probes, requests/limits)~~
+- [x] ~~Kubernetes : métriques metrics-server (CPU/mémoire des pods et nœuds)~~
+- [x] ~~Kubernetes : actions en masse sur les pods (sélection multiple + suppression)~~
+- [x] ~~Kubernetes : Endpoints, PV, StorageClasses, ServiceAccounts, Namespaces (lecture)~~
+- [x] ~~Kubernetes : RBAC en lecture (Rôles, ClusterRoles, Bindings)~~
+- [x] ~~Éditeur YAML : voir / éditer une ressource, créer depuis un manifeste collé~~
 - [ ] Terminal interactif (session PTY persistante)
-- [ ] Éditeur YAML avec application des changements
+- [ ] Watch temps réel (kube watch), rollback des déploiements
+- [ ] Cordon / drain des nœuds, exec PTY
+- [ ] Découverte automatique des CRD, multi-namespace
 - [ ] RBAC-aware : masquer les actions non permises
 - [ ] Machines Linux
 - [ ] Plugins (WebAssembly ?)

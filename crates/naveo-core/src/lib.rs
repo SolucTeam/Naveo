@@ -15,8 +15,8 @@ use kube::Client;
 
 pub use events::{
     Command, ContainerFile, ContainerInfo, ContextInfo, DeploymentInfo, Event, HubRepo, ImageInfo,
-    ImageLayerInfo, K8sEventInfo, NetworkInfo, NodeInfo, PodInfo, ResourceInfo, ServiceInfo,
-    StatsInfo, VolumeInfo,
+    ImageLayerInfo, K8sEventInfo, NetworkInfo, NodeInfo, PodDetailInfo, PodInfo, PodMetricsInfo,
+    ResourceInfo, ServiceInfo, StatsInfo, VolumeInfo, WorkloadInfo,
 };
 
 /// Exécute une commande dans le runtime asynchrone et pousse
@@ -308,6 +308,81 @@ pub async fn dispatch(
             tx.send(Event::Deployments(k8s::list_deployments(client).await?))?;
             tx.send(Event::Services(k8s::list_services(client).await?))?;
             tx.send(Event::Events(k8s::list_events(client).await?))?;
+            // Métriques : si le metrics-server est absent, on ignore
+            // l'erreur et les colonnes CPU/mem restent vides.
+            if let Ok((pods, nodes)) = k8s::load_metrics(client).await {
+                tx.send(Event::Metrics { pods, nodes })?;
+            }
+        }
+        Command::LoadMetrics => {
+            let client = kube.ok_or_else(|| anyhow::anyhow!("Kubernetes non connecté"))?;
+            let (pods, nodes) = k8s::load_metrics(client).await?;
+            tx.send(Event::Metrics { pods, nodes })?;
+        }
+        Command::LoadWorkloads { kind } => {
+            let client = kube.ok_or_else(|| anyhow::anyhow!("Kubernetes non connecté"))?;
+            let items = k8s::list_workloads(client, &kind).await?;
+            tx.send(Event::Workloads { kind, items })?;
+        }
+        Command::DeleteWorkload {
+            kind,
+            namespace,
+            name,
+        } => {
+            let client = kube.ok_or_else(|| anyhow::anyhow!("Kubernetes non connecté"))?;
+            k8s::delete_workload(client, &kind, &namespace, &name).await?;
+            let items = k8s::list_workloads(client, &kind).await?;
+            tx.send(Event::Workloads { kind, items })?;
+            tx.send(Event::Notice(format!("{name} supprimé")))?;
+        }
+        Command::ScaleWorkload {
+            kind,
+            namespace,
+            name,
+            replicas,
+        } => {
+            let client = kube.ok_or_else(|| anyhow::anyhow!("Kubernetes non connecté"))?;
+            k8s::scale_workload(client, &kind, &namespace, &name, replicas).await?;
+            let items = k8s::list_workloads(client, &kind).await?;
+            tx.send(Event::Workloads { kind, items })?;
+            tx.send(Event::Notice(format!("{name} : {replicas} réplica(s)")))?;
+        }
+        Command::RolloutRestartWorkload {
+            kind,
+            namespace,
+            name,
+        } => {
+            let client = kube.ok_or_else(|| anyhow::anyhow!("Kubernetes non connecté"))?;
+            k8s::rollout_restart_workload(client, &kind, &namespace, &name).await?;
+            tx.send(Event::Notice(format!("Rollout restart lancé sur {name}")))?;
+        }
+        Command::LoadPodDetail { namespace, name } => {
+            let client = kube.ok_or_else(|| anyhow::anyhow!("Kubernetes non connecté"))?;
+            let detail = k8s::pod_detail(client, &namespace, &name).await?;
+            tx.send(Event::PodDetail(Box::new(detail)))?;
+        }
+        Command::DeletePods { pods } => {
+            let client = kube.ok_or_else(|| anyhow::anyhow!("Kubernetes non connecté"))?;
+            k8s::delete_pods(client, &pods).await?;
+            tx.send(Event::Pods(k8s::list_pods(client).await?))?;
+            tx.send(Event::Notice(format!("{} pod(s) supprimé(s)", pods.len())))?;
+        }
+        Command::GetResourceYaml {
+            kind,
+            namespace,
+            name,
+        } => {
+            let client = kube.ok_or_else(|| anyhow::anyhow!("Kubernetes non connecté"))?;
+            let yaml = k8s::get_resource_yaml(client, &kind, &namespace, &name).await?;
+            tx.send(Event::ResourceYaml {
+                key: format!("{kind}/{namespace}/{name}"),
+                yaml,
+            })?;
+        }
+        Command::ApplyYaml { yaml } => {
+            let client = kube.ok_or_else(|| anyhow::anyhow!("Kubernetes non connecté"))?;
+            let msg = k8s::apply_yaml(client, &yaml).await?;
+            tx.send(Event::Notice(msg))?;
         }
         // Géré par la tâche de fond de l'app (mutabilité du client / flux),
         // jamais atteint ici.
