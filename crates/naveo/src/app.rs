@@ -52,6 +52,9 @@ pub struct NaveoApp {
     pub(crate) exec_target: Option<String>,
     pub(crate) exec_busy: bool,
 
+    // Multi-cluster
+    pub(crate) contexts: Vec<naveo_core::ContextInfo>,
+
     pub(crate) search: String,
     pub(crate) error: Option<String>,
     pub(crate) last_refresh: Instant,
@@ -85,6 +88,7 @@ impl NaveoApp {
             exec_out: HashMap::new(),
             exec_target: None,
             exec_busy: false,
+            contexts: Vec::new(),
             search: String::new(),
             error: None,
             last_refresh: Instant::now() - Duration::from_secs(10),
@@ -99,12 +103,43 @@ impl NaveoApp {
     pub(crate) fn refresh_visible(&self) {
         self.send(naveo_core::Command::RefreshContainers);
         self.send(naveo_core::Command::RefreshImages);
-        match self.page {
-            Page::Noeuds | Page::Pods | Page::Deploiements => {
-                self.send(naveo_core::Command::RefreshK8s);
-            }
-            _ => {}
+        if self.k8s_ok {
+            self.send(naveo_core::Command::RefreshK8s);
         }
+    }
+
+    /// Ouvre un sélecteur de fichier et copie le kubeconfig dans ~/.kube/,
+    /// puis rescanne les contextes (comme l'import de Headlamp).
+    pub(crate) fn import_kubeconfig(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Choisir un kubeconfig à importer")
+            .pick_file()
+        else {
+            return;
+        };
+
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let kube_dir = std::path::PathBuf::from(home).join(".kube");
+        if std::fs::create_dir_all(&kube_dir).is_err() {
+            self.error = Some("Impossible de créer ~/.kube/".into());
+            self.last_error = Some(Instant::now());
+            return;
+        }
+
+        if let Some(name) = path.file_name() {
+            let dest = kube_dir.join(name);
+            if path != dest {
+                if let Err(e) = std::fs::copy(&path, &dest) {
+                    self.error = Some(format!("Import impossible : {e}"));
+                    self.last_error = Some(Instant::now());
+                    return;
+                }
+            }
+        }
+
+        self.send(naveo_core::Command::RefreshContexts);
     }
 
     /// Consomme les événements poussés par le backend.
@@ -140,6 +175,12 @@ impl NaveoApp {
                     }
                     self.log_target = Some(target);
                     self.exec_busy = false;
+                }
+                Event::ContextsAvailable(list) => self.contexts = list,
+                Event::K8sConnected { context } => {
+                    self.k8s_ok = true;
+                    self.k8s_ctx = context;
+                    self.send(naveo_core::Command::RefreshK8s);
                 }
                 Event::Error(e) => {
                     self.error = Some(e);
@@ -310,19 +351,53 @@ impl NaveoApp {
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Carte de statut des connexions.
-                        status_chip(ui, p, "Docker", self.docker_ok);
-                        status_chip(ui, p, "Kubernetes", self.k8s_ok);
-                        if !self.k8s_ctx.is_empty() {
-                            ui.label(
-                                egui::RichText::new(format!("· {}", self.k8s_ctx))
-                                    .size(11.0)
-                                    .color(p.dim),
-                            );
-                        }
                         if ui.button("↻").clicked() {
                             self.refresh_visible();
                         }
+                        if ui
+                            .button("📁")
+                            .on_hover_text("Ajouter un kubeconfig…")
+                            .clicked()
+                        {
+                            self.import_kubeconfig();
+                        }
+
+                        // Sélecteur de cluster (multi-cluster).
+                        if !self.contexts.is_empty() {
+                            let current = if self.k8s_ok {
+                                self.k8s_ctx.clone()
+                            } else {
+                                "Choisir un cluster…".to_string()
+                            };
+                            egui::ComboBox::from_id_salt("cluster-select")
+                                .selected_text(egui::RichText::new(&current).size(12.0))
+                                .width(230.0)
+                                .show_ui(ui, |ui| {
+                                    let mut picked: Option<(String, String)> = None;
+                                    for ctx in &self.contexts {
+                                        let selected = self.k8s_ok && self.k8s_ctx == ctx.name;
+                                        if ui
+                                            .selectable_label(
+                                                selected,
+                                                format!("{} · {}", ctx.name, ctx.cluster),
+                                            )
+                                            .clicked()
+                                        {
+                                            picked = Some((ctx.file.clone(), ctx.name.clone()));
+                                        }
+                                    }
+                                    if let Some((file, name)) = picked {
+                                        self.send(naveo_core::Command::ConnectContext {
+                                            file,
+                                            context: name.clone(),
+                                        });
+                                        self.k8s_ctx = name;
+                                    }
+                                });
+                        }
+
+                        status_chip(ui, p, "Kubernetes", self.k8s_ok);
+                        status_chip(ui, p, "Docker", self.docker_ok);
                     });
                 });
             });

@@ -14,8 +14,8 @@ use crossbeam_channel::Sender;
 use kube::Client;
 
 pub use events::{
-    Command, ContainerInfo, DeploymentInfo, Event, ImageInfo, NetworkInfo, NodeInfo, PodInfo,
-    VolumeInfo,
+    Command, ContainerInfo, ContextInfo, DeploymentInfo, Event, ImageInfo, NetworkInfo, NodeInfo,
+    PodInfo, VolumeInfo,
 };
 
 /// Exécute une commande dans le runtime asynchrone et pousse
@@ -79,6 +79,9 @@ pub async fn dispatch(
             k8s::delete_pod(client, &namespace, &name).await?;
             tx.send(Event::Pods(k8s::list_pods(client).await?))?;
         }
+        Command::RefreshContexts => {
+            tx.send(Event::ContextsAvailable(k8s::list_contexts()))?;
+        }
         Command::PodLogs {
             namespace, name, ..
         } => {
@@ -110,6 +113,9 @@ pub async fn dispatch(
                 text,
             })?;
         }
+        // Géré par la tâche de fond de l'app (mutabilité du client),
+        // jamais atteint ici.
+        Command::ConnectContext { .. } => {}
     }
     Ok(())
 }

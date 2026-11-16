@@ -20,6 +20,77 @@ pub async fn connect() -> Result<(Client, String)> {
 }
 
 // ---------------------------------------------------------------------------
+// Multi-cluster
+// ---------------------------------------------------------------------------
+
+/// Découvre tous les contextes disponibles : `$KUBECONFIG` (séparé par « : »),
+/// sinon tous les fichiers de `~/.kube/` (un fichier par environnement).
+pub fn list_contexts() -> Vec<crate::events::ContextInfo> {
+    use crate::events::ContextInfo;
+    use std::path::PathBuf;
+
+    let mut paths: Vec<PathBuf> = Vec::new();
+    if let Ok(kc) = std::env::var("KUBECONFIG") {
+        for p in kc.split(':').filter(|s| !s.is_empty()) {
+            paths.push(PathBuf::from(p));
+        }
+    } else if let Some(home) = std::env::var_os("HOME") {
+        let dir = PathBuf::from(home).join(".kube");
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_file() {
+                    paths.push(p);
+                }
+            }
+        }
+    }
+
+    let mut out: Vec<ContextInfo> = Vec::new();
+    for path in paths {
+        // Ignore les fichiers temporaires et les sauvegardes expirées.
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if name.starts_with('.') || name.contains("expired") {
+            continue;
+        }
+
+        let Ok(cfg) = kube::config::Kubeconfig::read_from(&path) else {
+            continue;
+        };
+        let file = path.display().to_string();
+        for named in cfg.contexts {
+            let cluster = named
+                .context
+                .as_ref()
+                .map(|c| c.cluster.clone())
+                .unwrap_or_default();
+            out.push(ContextInfo {
+                file: file.clone(),
+                name: named.name,
+                cluster,
+            });
+        }
+    }
+
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Se connecte à un contexte précis d'un kubeconfig donné.
+pub async fn connect_to(file: &str, context: &str) -> Result<(Client, String)> {
+    let mut cfg = kube::config::Kubeconfig::read_from(std::path::Path::new(file))?;
+    cfg.current_context = Some(context.to_string());
+
+    let config = kube::Config::from_custom_kubeconfig(cfg, &Default::default()).await?;
+    let client = Client::try_from(config)?;
+    Ok((client, context.to_string()))
+}
+
+// ---------------------------------------------------------------------------
 // Nœuds
 // ---------------------------------------------------------------------------
 

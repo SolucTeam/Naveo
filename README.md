@@ -32,10 +32,11 @@ Naveo est une application desktop **100 % Rust** (pas d'Electron, pas de navigat
 - ✅ Auto-rafraîchissement toutes les 5 s + recherche globale
 
 ### Kubernetes
+- ✅ **Multi-cluster** : détection automatique de tous les kubeconfigs de `~/.kube/` et de `$KUBECONFIG`, sélecteur de cluster dans la barre du haut, import de kubeconfig 📁
 - ✅ Nœuds : état Ready, version kubelet, IP, rôles, ressources allocables
 - ✅ Pods : namespace, phase, redémarrages, conteneurs, logs, suppression
 - ✅ Déploiements : réplicas prêts/souhaités, image
-- ✅ Connexion au contexte par défaut du KUBECONFIG
+- ✅ **Terminal** : `sh -c <cmd>` dans un conteneur ou un pod
 
 ### Interface
 - ✅ UI native Rust ([egui](https://github.com/emilk/egui)) : fenêtre légère, démarrage instantané
@@ -89,9 +90,10 @@ et affiche l'état des connexions ; les pages concernées restent désactivées.
 
 ## Feuille de route
 
-- [ ] Terminal interactif (exec) dans les conteneurs et les pods — inspiré de Headlamp
+- [x] ~~Terminal : exécution de commandes dans conteneurs et pods~~
+- [x] ~~Multi-cluster : sélecteur de contexte + import de kubeconfig~~
+- [ ] Terminal interactif (session PTY persistante)
 - [ ] Éditeur YAML avec application des changements
-- [ ] Sélecteur de contexte multi-cluster (KUBECONFIG multiples)
 - [ ] Suivi des logs en continu (follow)
 - [ ] RBAC-aware : masquer les actions non permises
 - [ ] Compose : `up`/`down` depuis l'UI

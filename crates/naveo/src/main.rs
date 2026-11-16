@@ -22,7 +22,7 @@ fn main() -> eframe::Result<()> {
     // Tâche de fond : se connecte, puis traite les commandes une à une.
     rt.spawn(async move {
         let docker = naveo_core::docker::connect().await.ok();
-        let k8s = naveo_core::k8s::connect().await.ok();
+        let mut k8s = naveo_core::k8s::connect().await.ok();
 
         let _ = evt_tx.send(Event::Connected {
             docker: docker.is_some(),
@@ -30,19 +30,36 @@ fn main() -> eframe::Result<()> {
             context: k8s.as_ref().map(|(_, ctx)| ctx.clone()).unwrap_or_default(),
         });
 
+        // Contextes découverts dans les kubeconfigs locaux (multi-cluster).
+        let _ = evt_tx.send(Event::ContextsAvailable(naveo_core::k8s::list_contexts()));
+
         while let Some(cmd) = cmd_rx.recv().await {
-            match naveo_core::dispatch(
-                cmd,
-                docker.as_ref(),
-                k8s.as_ref().map(|(c, _)| c),
-                evt_tx.clone(),
-            )
-            .await
-            {
-                Ok(()) => {}
-                Err(e) => {
-                    let _ = evt_tx.send(Event::Error(e.to_string()));
+            match cmd {
+                Command::ConnectContext { file, context } => {
+                    match naveo_core::k8s::connect_to(&file, &context).await {
+                        Ok((client, ctx)) => {
+                            k8s = Some((client, ctx.clone()));
+                            let _ = evt_tx.send(Event::K8sConnected { context: ctx });
+                        }
+                        Err(e) => {
+                            let _ =
+                                evt_tx.send(Event::Error(format!("Connexion à {context} : {e}")));
+                        }
+                    }
                 }
+                other => match naveo_core::dispatch(
+                    other,
+                    docker.as_ref(),
+                    k8s.as_ref().map(|(c, _)| c),
+                    evt_tx.clone(),
+                )
+                .await
+                {
+                    Ok(()) => {}
+                    Err(e) => {
+                        let _ = evt_tx.send(Event::Error(e.to_string()));
+                    }
+                },
             }
         }
     });

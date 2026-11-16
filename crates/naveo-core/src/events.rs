@@ -39,6 +39,26 @@ pub enum Command {
         container: String,
         cmd: String,
     },
+
+    // Multi-cluster
+    /// Se connecte au contexte `context` défini dans le fichier `file`.
+    ConnectContext {
+        file: String,
+        context: String,
+    },
+    /// Rescanne les kubeconfigs locaux et renvoie ContextsAvailable.
+    RefreshContexts,
+}
+
+/// Un contexte Kubernetes découvert dans les kubeconfigs locaux.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ContextInfo {
+    /// Chemin du fichier kubeconfig.
+    pub file: String,
+    /// Nom du contexte.
+    pub name: String,
+    /// Nom du cluster pointé.
+    pub cluster: String,
 }
 
 /// Un état ou un résultat poussé vers l'UI.
@@ -65,6 +85,12 @@ pub enum Event {
     ExecOutput {
         target: String,
         text: String,
+    },
+    /// Contextes Kubernetes découverts dans les kubeconfigs locaux.
+    ContextsAvailable(Vec<ContextInfo>),
+    /// Connexion réussie à un contexte Kubernetes.
+    K8sConnected {
+        context: String,
     },
     Error(String),
 }
