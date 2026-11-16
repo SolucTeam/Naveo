@@ -24,6 +24,20 @@ pub async fn connect() -> Result<Docker> {
     Ok(docker)
 }
 
+/// Collecte un flux d'octets bollard (export, download…) dans un Vec.
+async fn body_to_vec<S, B>(mut stream: S) -> Result<Vec<u8>>
+where
+    S: futures::Stream<Item = std::result::Result<B, bollard::errors::Error>> + Unpin,
+    B: AsRef<[u8]>,
+{
+    let mut out = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        out.extend_from_slice(chunk.as_ref());
+    }
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------------
 // Listes
 // ---------------------------------------------------------------------------
@@ -371,12 +385,21 @@ pub async fn exec_container(docker: &Docker, name: &str, cmd: &str) -> Result<St
 // Logs
 // ---------------------------------------------------------------------------
 
-pub async fn container_logs(docker: &Docker, name: &str) -> Result<String> {
+pub async fn container_logs(
+    docker: &Docker,
+    name: &str,
+    timestamps: bool,
+    tail: i64,
+) -> Result<String> {
     let opts = LogsOptions::<String> {
         stdout: true,
         stderr: true,
-        tail: "500".into(),
-        timestamps: false,
+        tail: if tail > 0 {
+            tail.to_string()
+        } else {
+            "all".into()
+        },
+        timestamps,
         follow: false,
         since: 0,
         until: 0,
@@ -394,4 +417,540 @@ pub async fn container_logs(docker: &Docker, name: &str) -> Result<String> {
         out.push_str(&String::from_utf8_lossy(bytes));
     }
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Pull / Docker Hub
+// ---------------------------------------------------------------------------
+
+/// Dépôt trouvé sur Docker Hub via l'API publique de recherche.
+#[derive(serde::Deserialize)]
+struct HubSearchResponse {
+    results: Vec<HubSearchRepo>,
+}
+
+#[derive(serde::Deserialize)]
+struct HubSearchRepo {
+    #[serde(default)]
+    repo_name: String,
+    #[serde(default)]
+    short_description: String,
+    #[serde(default)]
+    star_count: u64,
+    #[serde(default)]
+    pull_count: u64,
+    #[serde(default)]
+    is_official: bool,
+}
+
+/// Recherche des images sur Docker Hub (API publique v2).
+pub async fn hub_search(query: &str) -> Result<Vec<crate::events::HubRepo>> {
+    let url = format!("https://hub.docker.com/v2/search/repositories/?query={query}&page_size=20");
+    let resp: HubSearchResponse = reqwest::get(&url).await?.json().await?;
+
+    Ok(resp
+        .results
+        .into_iter()
+        .map(|r| crate::events::HubRepo {
+            name: r.repo_name,
+            description: r.short_description,
+            stars: r.star_count,
+            pulls: r.pull_count,
+            official: r.is_official,
+        })
+        .collect())
+}
+
+/// Tags d'un dépôt Docker Hub (ex. « library/nginx » ou « user/img »).
+pub async fn hub_tags(repo: &str) -> Result<Vec<String>> {
+    let url = format!("https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=25");
+    #[derive(serde::Deserialize)]
+    struct Resp {
+        results: Vec<Tag>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Tag {
+        name: String,
+    }
+    let resp: Resp = reqwest::get(&url).await?.json().await?;
+    Ok(resp.results.into_iter().map(|t| t.name).collect())
+}
+
+/// Tire une image (bloc jusqu'à la fin du téléchargement).
+pub async fn pull_image(docker: &Docker, image: &str) -> Result<()> {
+    use futures::StreamExt as _;
+    let options = bollard::image::CreateImageOptions {
+        from_image: image.to_string(),
+        ..Default::default()
+    };
+    let mut stream = docker.create_image(Some(options), None, None);
+    while let Some(ev) = stream.next().await {
+        ev?; // remonte les erreurs (image introuvable…)
+    }
+    Ok(())
+}
+
+/// Crée et démarre un conteneur à partir d'une image.
+pub async fn run_container(
+    docker: &Docker,
+    image: &str,
+    name: &str,
+    env: &[(String, String)],
+    ports: &[(String, String)],
+) -> Result<String> {
+    use std::collections::HashMap;
+
+    let env_vars: Vec<String> = env
+        .iter()
+        .filter(|(k, _)| !k.is_empty())
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+
+    // Bindings de ports : conteneur → hôte.
+    let mut exposed: HashMap<String, HashMap<(), ()>> = HashMap::new();
+    let mut bindings: HashMap<String, Vec<bollard::secret::PortBinding>> = HashMap::new();
+    for (cport, hport) in ports {
+        if cport.is_empty() || hport.is_empty() {
+            continue;
+        }
+        exposed.entry(cport.clone()).or_default();
+        bindings
+            .entry(cport.clone())
+            .or_default()
+            .push(bollard::secret::PortBinding {
+                host_ip: None,
+                host_port: Some(hport.clone()),
+            });
+    }
+
+    let host_config = bollard::models::HostConfig {
+        port_bindings: Some(bindings.into_iter().map(|(k, v)| (k, Some(v))).collect()),
+        ..Default::default()
+    };
+
+    let options = bollard::container::Config {
+        image: Some(image.to_string()),
+        env: Some(env_vars),
+        exposed_ports: Some(exposed),
+        host_config: Some(host_config),
+        ..Default::default()
+    };
+
+    let opts = bollard::container::CreateContainerOptions {
+        name: name.to_string(),
+        platform: None,
+    };
+    let created = docker.create_container(Some(opts), options).await?;
+    docker
+        .start_container(
+            &created.id,
+            None::<bollard::container::StartContainerOptions<String>>,
+        )
+        .await?;
+    Ok(created.id)
+}
+
+// ---------------------------------------------------------------------------
+// Prune / actions en masse
+// ---------------------------------------------------------------------------
+
+/// Résultat d'un prune : nombre d'éléments et octets récupérés.
+pub struct PruneResult {
+    pub deleted: u64,
+    pub space_reclaimed: u64,
+}
+
+/// Nettoie les ressources inutilisées : containers|images|volumes|networks.
+pub async fn prune(docker: &Docker, kind: &str) -> Result<PruneResult> {
+    #[allow(unused_variables)]
+    let (deleted, space) = match kind {
+        "containers" => {
+            let r = docker
+                .prune_containers(None::<bollard::container::PruneContainersOptions<String>>)
+                .await?;
+            (
+                r.containers_deleted.map(|v| v.len()).unwrap_or(0) as u64,
+                r.space_reclaimed.unwrap_or(0) as u64,
+            )
+        }
+        "images" => {
+            let r = docker
+                .prune_images(None::<bollard::image::PruneImagesOptions<String>>)
+                .await?;
+            (
+                r.images_deleted.map(|v| v.len()).unwrap_or(0) as u64,
+                r.space_reclaimed.unwrap_or(0) as u64,
+            )
+        }
+        "volumes" => {
+            let r = docker
+                .prune_volumes(None::<bollard::volume::PruneVolumesOptions<String>>)
+                .await?;
+            (
+                r.volumes_deleted.map(|v| v.len()).unwrap_or(0) as u64,
+                r.space_reclaimed.unwrap_or(0) as u64,
+            )
+        }
+        "networks" => {
+            let r = docker
+                .prune_networks(None::<bollard::network::PruneNetworksOptions<String>>)
+                .await?;
+            (r.networks_deleted.map(|v| v.len()).unwrap_or(0) as u64, 0)
+        }
+        _ => anyhow::bail!("type de prune inconnu : {kind}"),
+    };
+    Ok(PruneResult {
+        deleted,
+        space_reclaimed: space,
+    })
+}
+
+/// Applique une action à plusieurs conteneurs.
+pub async fn bulk_containers(docker: &Docker, names: &[String], action: &str) -> Result<()> {
+    for name in names {
+        match action {
+            "start" => start_container(docker, name).await?,
+            "stop" => stop_container(docker, name).await?,
+            "restart" => restart_container(docker, name).await?,
+            "pause" => pause_container(docker, name).await?,
+            "remove" => remove_container(docker, name).await?,
+            _ => anyhow::bail!("action inconnue : {action}"),
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Gestion d'images avancée
+// ---------------------------------------------------------------------------
+
+/// Applique un nouveau tag à une image.
+pub async fn tag_image(docker: &Docker, image: &str, tag: &str) -> Result<()> {
+    use bollard::image::TagImageOptions;
+    let opts = TagImageOptions {
+        repo: tag.split(':').next().unwrap_or(tag).to_string(),
+        tag: tag
+            .split_once(':')
+            .map(|(_, t)| t.to_string())
+            .unwrap_or_default(),
+    };
+    docker.tag_image(image, Some(opts)).await?;
+    Ok(())
+}
+
+/// Exporte une image vers un fichier tar (docker save).
+pub async fn save_image(docker: &Docker, image: &str, path: &str) -> Result<()> {
+    let bytes = body_to_vec(docker.export_image(image)).await?;
+    tokio::fs::write(path, &bytes).await?;
+    Ok(())
+}
+
+/// Importe une image depuis un fichier tar (docker load).
+pub async fn load_image(docker: &Docker, path: &str) -> Result<String> {
+    use futures::StreamExt as _;
+    let data = tokio::fs::read(path).await?;
+    let mut stream = docker.import_image(
+        bollard::image::ImportImageOptions::default(),
+        data.into(),
+        None,
+    );
+    let mut summary = String::new();
+    while let Some(chunk) = stream.next().await {
+        let info = chunk?;
+        if let Some(err) = info.error {
+            anyhow::bail!("import : {err}");
+        }
+        if let Some(status) = info.status {
+            summary.push_str(&status);
+            summary.push('\n');
+        }
+    }
+    Ok(summary)
+}
+
+/// Historique des couches d'une image.
+pub async fn image_history(
+    docker: &Docker,
+    image: &str,
+) -> Result<Vec<crate::events::ImageLayerInfo>> {
+    let history = docker.image_history(image).await?;
+    Ok(history
+        .into_iter()
+        .map(|h| crate::events::ImageLayerInfo {
+            created_by: h.created_by,
+            size_bytes: h.size.max(0) as u64,
+            created: h.created,
+        })
+        .collect())
+}
+
+/// Connecte un registre : écrit ~/.docker/config.json comme la CLI.
+pub async fn registry_login(server: &str, username: &str, password: &str) -> Result<()> {
+    use base64::Engine as _;
+    let path = docker_config_path()?;
+    let mut cfg: serde_json::Value = match tokio::fs::read_to_string(&path).await {
+        Ok(s) => serde_json::from_str(&s)?,
+        Err(_) => serde_json::json!({}),
+    };
+    let auth = base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
+    let auths = cfg
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("config.json invalide"))?
+        .entry("auths")
+        .or_insert_with(|| serde_json::json!({}));
+    auths
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("auths invalide"))?
+        .insert(
+            server.to_string(),
+            serde_json::json!({ "auth": auth, "username": username }),
+        );
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&path, serde_json::to_string_pretty(&cfg)?).await?;
+    Ok(())
+}
+
+/// Déconnecte un registre.
+pub async fn registry_logout(server: &str) -> Result<()> {
+    let path = docker_config_path()?;
+    let Ok(s) = tokio::fs::read_to_string(&path).await else {
+        return Ok(());
+    };
+    let mut cfg: serde_json::Value = serde_json::from_str(&s)?;
+    if let Some(auths) = cfg.get_mut("auths").and_then(|a| a.as_object_mut()) {
+        auths.remove(server);
+    }
+    tokio::fs::write(&path, serde_json::to_string_pretty(&cfg)?).await?;
+    Ok(())
+}
+
+fn docker_config_path() -> Result<std::path::PathBuf> {
+    Ok(home::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("home introuvable"))?
+        .join(".docker")
+        .join("config.json"))
+}
+
+// ---------------------------------------------------------------------------
+// Fichiers du conteneur (docker cp)
+// ---------------------------------------------------------------------------
+
+/// Liste un répertoire du conteneur en lisant l'archive tar retournée
+/// par l'API « download from container » (docker cp).
+pub async fn list_files(
+    docker: &Docker,
+    name: &str,
+    path: &str,
+) -> Result<Vec<crate::events::ContainerFile>> {
+    use tar::Archive;
+
+    let stream = docker.download_from_container(
+        name,
+        Some(bollard::container::DownloadFromContainerOptions {
+            path: path.to_string(),
+        }),
+    );
+    let bytes = body_to_vec(stream).await?;
+
+    let mut entries = Vec::new();
+    let mut archive = Archive::new(&bytes[..]);
+    for entry in archive.entries()? {
+        let entry = entry?;
+        let name = entry
+            .path()?
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if name.is_empty() {
+            continue;
+        }
+        let is_dir = entry.header().entry_type().is_dir();
+        let size = entry.header().size()?;
+        let mode = format!("{:o}", entry.header().mode().unwrap_or(0));
+        entries.push(crate::events::ContainerFile {
+            name,
+            size,
+            is_dir,
+            mode,
+        });
+    }
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
+    Ok(entries)
+}
+
+/// Extrait un fichier du conteneur (petit : ≤ 256 Ko) pour l'aperçu.
+pub async fn preview_file(docker: &Docker, name: &str, path: &str) -> Result<String> {
+    use tar::Archive;
+
+    let stream = docker.download_from_container(
+        name,
+        Some(bollard::container::DownloadFromContainerOptions {
+            path: path.to_string(),
+        }),
+    );
+    let bytes = body_to_vec(stream).await?;
+
+    let mut archive = Archive::new(&bytes[..]);
+    for entry in archive.entries()? {
+        let entry = entry?;
+        if entry.header().entry_type().is_dir() {
+            continue;
+        }
+        let mut content = Vec::new();
+        use std::io::Read as _;
+        entry.take(256 * 1024).read_to_end(&mut content)?;
+        return Ok(String::from_utf8_lossy(&content).to_string());
+    }
+    anyhow::bail!("fichier introuvable dans l'archive")
+}
+
+/// Sauvegarde un fichier/répertoire du conteneur vers le disque (tar).
+pub async fn save_file(docker: &Docker, name: &str, path: &str, dest: &str) -> Result<()> {
+    let stream = docker.download_from_container(
+        name,
+        Some(bollard::container::DownloadFromContainerOptions {
+            path: path.to_string(),
+        }),
+    );
+    let bytes = body_to_vec(stream).await?;
+    tokio::fs::write(dest, &bytes).await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Édition à chaud : rename, commit, export, recréation
+// ---------------------------------------------------------------------------
+
+/// Renomme un conteneur.
+pub async fn rename_container(docker: &Docker, name: &str, new_name: &str) -> Result<()> {
+    use bollard::container::RenameContainerOptions;
+    docker
+        .rename_container(
+            name,
+            RenameContainerOptions {
+                name: new_name.to_string(),
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+/// Commit : crée une image à partir de l'état actuel du conteneur.
+pub async fn commit_container(
+    docker: &Docker,
+    name: &str,
+    repo: &str,
+    tag: &str,
+) -> Result<String> {
+    let opts = bollard::image::CommitContainerOptions {
+        container: name.to_string(),
+        repo: repo.to_string(),
+        tag: tag.to_string(),
+        ..Default::default()
+    };
+    let commit = docker
+        .commit_container(opts, bollard::container::Config::<String>::default())
+        .await?;
+    Ok(commit.id.unwrap_or_default())
+}
+
+/// Exporte le système de fichiers du conteneur en tar.
+pub async fn export_container(docker: &Docker, name: &str, path: &str) -> Result<()> {
+    let bytes = body_to_vec(docker.export_container(name)).await?;
+    tokio::fs::write(path, &bytes).await?;
+    Ok(())
+}
+
+/// Recrée un conteneur : inspecte l'ancien, crée un nouveau avec les
+/// nouvelles env/ports, le démarre, supprime l'ancien.
+pub async fn recreate_container(
+    docker: &Docker,
+    name: &str,
+    env: &[(String, String)],
+    ports: &[(String, String)],
+) -> Result<()> {
+    use std::collections::HashMap;
+
+    let old = docker.inspect_container(name, None).await?;
+    let old_config = old
+        .config
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("conteneur sans configuration"))?;
+    let image = old_config
+        .image
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("conteneur sans image"))?;
+
+    let env_vars: Vec<String> = env
+        .iter()
+        .filter(|(k, _)| !k.is_empty())
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+
+    let mut exposed: HashMap<String, HashMap<(), ()>> = HashMap::new();
+    let mut bindings: HashMap<String, Vec<bollard::secret::PortBinding>> = HashMap::new();
+    for (cport, hport) in ports {
+        if cport.is_empty() || hport.is_empty() {
+            continue;
+        }
+        exposed.entry(cport.clone()).or_default();
+        bindings
+            .entry(cport.clone())
+            .or_default()
+            .push(bollard::secret::PortBinding {
+                host_ip: None,
+                host_port: Some(hport.clone()),
+            });
+    }
+
+    // Conserve la commande, le point d'entrée, les volumes et le réseau.
+    let mut new_config: bollard::container::Config<String> = bollard::container::Config {
+        image: Some(image.clone()),
+        cmd: old_config.cmd.clone(),
+        entrypoint: old_config.entrypoint.clone(),
+        working_dir: old_config.working_dir.clone(),
+        user: old_config.user.clone(),
+        tty: old_config.tty,
+        open_stdin: old_config.open_stdin,
+        env: Some(env_vars),
+        exposed_ports: Some(exposed),
+        ..Default::default()
+    };
+
+    let mut host_config: bollard::models::HostConfig = old.host_config.clone().unwrap_or_default();
+    host_config.port_bindings = Some(bindings.into_iter().map(|(k, v)| (k, Some(v))).collect());
+    new_config.host_config = Some(host_config);
+
+    // Ancien nom sans le '/' initial.
+    let old_name = name.trim_start_matches('/').to_string();
+    let tmp_name = format!("{}-naveo-recreate", old_name);
+
+    let created = docker
+        .create_container(
+            Some(bollard::container::CreateContainerOptions {
+                name: tmp_name.clone(),
+                platform: None,
+            }),
+            new_config,
+        )
+        .await?;
+
+    // Arrête et supprime l'ancien (le nom est libéré), puis renomme.
+    let _ = stop_container(docker, name).await;
+    remove_container(docker, name).await?;
+    docker
+        .rename_container(
+            &created.id,
+            bollard::container::RenameContainerOptions { name: old_name },
+        )
+        .await?;
+    docker
+        .start_container(
+            &created.id,
+            None::<bollard::container::StartContainerOptions<String>>,
+        )
+        .await?;
+    Ok(())
 }

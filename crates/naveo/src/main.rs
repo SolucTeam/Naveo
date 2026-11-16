@@ -111,6 +111,47 @@ fn main() -> eframe::Result<()> {
                         h.abort();
                     }
                 }
+                // Port-forward : tâche annulable (écoute TCP + relaye vers le pod).
+                Command::PortForward {
+                    namespace,
+                    pod,
+                    target_port,
+                    local_port,
+                } => {
+                    let key = format!("pf:{local_port}");
+                    if let Some(h) = follows.remove(&key) {
+                        h.abort();
+                    }
+                    if let Some((client, _)) = k8s.clone() {
+                        let tx2 = evt_tx.clone();
+                        let ns = namespace.clone();
+                        let pod_name = pod.clone();
+                        let handle = tokio::spawn(async move {
+                            let res = naveo_core::k8s::port_forward(
+                                &client,
+                                &ns,
+                                &pod_name,
+                                target_port,
+                                local_port,
+                                key.clone(),
+                                tx2.clone(),
+                            )
+                            .await;
+                            if let Err(e) = res {
+                                let _ = tx2.send(Event::PortForwardStopped {
+                                    key,
+                                    reason: e.to_string(),
+                                });
+                            }
+                        });
+                        follows.insert(format!("pf:{local_port}"), handle.abort_handle());
+                    }
+                }
+                Command::StopPortForward { key } => {
+                    if let Some(h) = follows.remove(&key) {
+                        h.abort();
+                    }
+                }
                 other => match naveo_core::dispatch(
                     other,
                     docker.as_ref(),

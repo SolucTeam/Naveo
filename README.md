@@ -94,10 +94,19 @@ et affiche l'état des connexions ; les pages concernées restent désactivées.
 - [x] ~~Détail conteneur : stats live (CPU/mémoire/réseau) + inspect JSON~~
 - [x] ~~Docker : pause/reprise/kill + actions sur tout un projet Compose~~
 - [x] ~~Kubernetes : drill-down par conteneur des pods, logs précédents (crash), filtre de namespace, Services~~
+- [x] ~~Docker Hub : pull d'image, recherche et tags, exécution avec env/ports~~
+- [x] ~~Actions en masse (multi-sélection) + prune conteneurs/images/volumes/réseaux~~
+- [x] ~~Gestion d'images : tag, export/import tar, historique des couches, registries~~
+- [x] ~~Explorateur de fichiers du conteneur (liste, aperçu, sauvegarde)~~
+- [x] ~~Édition à chaud : rename, commit, export, env/ports (recréation)~~
+- [x] ~~Logs enrichis : filtre par niveau, timestamps, tail, téléchargement~~
+- [x] ~~Terminal : historique des commandes (↑↓)~~
+- [x] ~~Kubernetes : vue Événements, scale + rollout restart des déploiements~~
+- [x] ~~Kubernetes : port-forward local → pod, ConfigMaps / Secrets / Ingress / PVC~~
+- [x] ~~Préférences persistées (thème), thème système, tri de colonnes, copier au presse-papier~~
 - [ ] Terminal interactif (session PTY persistante)
 - [ ] Éditeur YAML avec application des changements
 - [ ] RBAC-aware : masquer les actions non permises
-- [ ] Compose : `up`/`down` depuis l'UI
 - [ ] Machines Linux
 - [ ] Plugins (WebAssembly ?)
 

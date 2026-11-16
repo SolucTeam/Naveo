@@ -117,6 +117,35 @@ pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
                     .desired_width(ui.available_width() - 120.0),
             );
 
+            // Historique : ↑ rappelle la commande précédente, ↓ la suivante.
+            if response.lost_focus() && !app.cmd_history.is_empty() {
+                let (up, down) = ui.input(|i| {
+                    (
+                        i.key_pressed(egui::Key::ArrowUp),
+                        i.key_pressed(egui::Key::ArrowDown),
+                    )
+                });
+                if up {
+                    let pos = match app.cmd_hist_idx {
+                        Some(p) => (p + 1).min(app.cmd_history.len() - 1),
+                        None => 0,
+                    };
+                    app.cmd_hist_idx = Some(pos);
+                    cmd = app.cmd_history[app.cmd_history.len() - 1 - pos].clone();
+                } else if down {
+                    match app.cmd_hist_idx {
+                        Some(0) | None => {
+                            app.cmd_hist_idx = None;
+                            cmd.clear();
+                        }
+                        Some(p) => {
+                            app.cmd_hist_idx = Some(p - 1);
+                            cmd = app.cmd_history[app.cmd_history.len() - 1 - (p - 1)].clone();
+                        }
+                    }
+                }
+            }
+
             let run = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let run = run
                 || ui
@@ -124,6 +153,12 @@ pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
                     .clicked();
 
             if run && !cmd.trim().is_empty() && !app.exec_busy {
+                // Historique : évite les doublons consécutifs, se replace en fin.
+                if app.cmd_history.last().map(|h| h.as_str()) != Some(cmd.trim()) {
+                    app.cmd_history.push(cmd.trim().to_string());
+                }
+                app.cmd_hist_idx = None;
+
                 // Mémorise la commande affichée + vide la ligne.
                 let entry = app.exec_out.entry(target_for_ui.clone()).or_default();
                 entry.push_str(&format!("❯ {cmd}\n"));

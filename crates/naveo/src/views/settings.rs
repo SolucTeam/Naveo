@@ -15,9 +15,32 @@ pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
     theme::card(ui, &p, |ui| {
         ui.label(egui::RichText::new("Apparence").strong());
         ui.add_space(4.0);
-        ui.checkbox(&mut app.dark, "Thème sombre");
+        ui.horizontal(|ui| {
+            ui.label("Thème :");
+            if ui
+                .selectable_label(app.theme_mode == crate::app::ThemeMode::Sombre, "🌙 Sombre")
+                .clicked()
+            {
+                app.set_theme_mode(crate::app::ThemeMode::Sombre);
+            }
+            if ui
+                .selectable_label(app.theme_mode == crate::app::ThemeMode::Clair, "☀ Clair")
+                .clicked()
+            {
+                app.set_theme_mode(crate::app::ThemeMode::Clair);
+            }
+            if ui
+                .selectable_label(
+                    app.theme_mode == crate::app::ThemeMode::Systeme,
+                    "🖥 Système",
+                )
+                .clicked()
+            {
+                app.set_theme_mode(crate::app::ThemeMode::Systeme);
+            }
+        });
         ui.label(
-            egui::RichText::new("Le thème s'applique immédiatement.")
+            egui::RichText::new("Le choix est mémorisé dans ~/.naveo/prefs.json.")
                 .size(12.0)
                 .color(p.dim),
         );

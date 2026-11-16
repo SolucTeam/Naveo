@@ -20,11 +20,51 @@ pub enum Page {
     Pods,
     Services,
     Deploiements,
-    /// Page détail d'un conteneur Docker (logs live, stats, inspect).
+    Evenements,
+    ConfigMaps,
+    Secrets,
+    Ingress,
+    Stockage,
+    /// Page détail d'un conteneur Docker (logs live, stats, inspect, fichiers).
     ContainerDetail(String),
     Terminal,
     Journal,
     Parametres,
+}
+
+/// Mode de thème : sombre, clair ou suivre le système.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThemeMode {
+    Sombre,
+    Clair,
+    Systeme,
+}
+
+impl ThemeMode {
+    fn key(self) -> &'static str {
+        match self {
+            ThemeMode::Sombre => "dark",
+            ThemeMode::Clair => "light",
+            ThemeMode::Systeme => "system",
+        }
+    }
+    fn from_key(s: &str) -> Self {
+        match s {
+            "light" => ThemeMode::Clair,
+            "system" => ThemeMode::Systeme,
+            _ => ThemeMode::Sombre,
+        }
+    }
+}
+
+/// Un port-forward actif.
+#[derive(Debug, Clone)]
+pub(crate) struct ForwardInfo {
+    pub key: String,
+    pub namespace: String,
+    pub pod: String,
+    pub local_port: u16,
+    pub target_port: u16,
 }
 
 pub struct NaveoApp {
@@ -68,10 +108,82 @@ pub struct NaveoApp {
     pub(crate) services: Vec<naveo_core::ServiceInfo>,
     prev_page: Option<Page>,
 
+    // Événements Kubernetes + ressources génériques
+    pub(crate) k8s_events: Vec<naveo_core::K8sEventInfo>,
+    pub(crate) resources: HashMap<String, Vec<naveo_core::ResourceInfo>>,
+
+    // Port-forwards actifs
+    pub(crate) forwards: Vec<ForwardInfo>,
+    pub(crate) pf_ns: String,
+    pub(crate) pf_pod: String,
+    pub(crate) pf_local: String,
+    pub(crate) pf_target: String,
+
+    // Images : pull / Docker Hub / run
+    pub(crate) pull_field: String,
+    pub(crate) hub_query: String,
+    pub(crate) hub_results: Vec<naveo_core::HubRepo>,
+    pub(crate) hub_tags: HashMap<String, Vec<String>>,
+    pub(crate) hub_open_repo: Option<String>,
+    pub(crate) run_open: bool,
+    pub(crate) run_image: String,
+    pub(crate) run_name: String,
+    pub(crate) run_env: Vec<(String, String)>,
+    pub(crate) run_ports: Vec<(String, String)>,
+    pub(crate) image_history: HashMap<String, Vec<naveo_core::ImageLayerInfo>>,
+    pub(crate) history_open: Option<String>,
+    pub(crate) tag_field: String,
+    /// Image en attente d'un nouveau tag (dialogue ouvert).
+    pub(crate) pending_tag: Option<String>,
+    /// Déclenche le sélecteur de fichier d'import d'image.
+    pub(crate) load_open: bool,
+    pub(crate) registry_open: bool,
+    pub(crate) reg_server: String,
+    pub(crate) reg_user: String,
+    pub(crate) reg_pass: String,
+
+    // Sélection multiple (actions en masse) + prune
+    pub(crate) sel_containers: HashSet<String>,
+    pub(crate) sel_images: HashSet<String>,
+    pub(crate) prune_confirm: Option<String>,
+
+    // Fichiers du conteneur (explorateur)
+    pub(crate) files_name: Option<String>,
+    pub(crate) files_path: String,
+    pub(crate) files_entries: Vec<naveo_core::ContainerFile>,
+    pub(crate) file_preview: Option<(String, String)>, // (chemin, contenu)
+
+    // Édition à chaud (détail conteneur)
+    pub(crate) rename_pending: Option<String>,
+    pub(crate) rename_field: String,
+    pub(crate) commit_pending: Option<String>,
+    pub(crate) commit_field: String,
+    pub(crate) edit_container: Option<String>,
+    pub(crate) edit_env: Vec<(String, String)>,
+    pub(crate) edit_ports: Vec<(String, String)>,
+
+    // Logs enrichis
+    pub(crate) log_timestamps: bool,
+    pub(crate) log_tail: i64,
+    pub(crate) log_level: String,
+
+    // Terminal : historique ↑↓
+    pub(crate) cmd_history: Vec<String>,
+    pub(crate) cmd_hist_idx: Option<usize>,
+
+    // Tri de colonnes : (colonne, croissant)
+    pub(crate) sort_containers: (usize, bool),
+    pub(crate) sort_images: (usize, bool),
+
+    // Thème et préférences persistées
+    pub(crate) theme_mode: ThemeMode,
+
     pub(crate) search: String,
     pub(crate) error: Option<String>,
+    pub(crate) notice: Option<String>,
     pub(crate) last_refresh: Instant,
     pub(crate) last_error: Option<Instant>,
+    pub(crate) last_notice: Option<Instant>,
 }
 
 impl NaveoApp {
@@ -80,12 +192,23 @@ impl NaveoApp {
         cmd_tx: tokio::sync::mpsc::UnboundedSender<naveo_core::Command>,
         evt_rx: crossbeam_channel::Receiver<Event>,
     ) -> Self {
+        // Préférences persistées (thème, options de logs).
+        let prefs = load_prefs();
+        let theme_mode = ThemeMode::from_key(&prefs.theme);
+
+        // Thème système : suit l'apparence de l'OS en mode « system ».
+        let dark = match theme_mode {
+            ThemeMode::Sombre => true,
+            ThemeMode::Clair => false,
+            ThemeMode::Systeme => dark_light::detect().is_ok_and(|m| m == dark_light::Mode::Dark),
+        };
+
         Self {
             cmd_tx,
             evt_rx,
             page: Page::Conteneurs,
-            palette: theme::dark(),
-            dark: true,
+            palette: if dark { theme::dark() } else { theme::light() },
+            dark,
             docker_ok: false,
             k8s_ok: false,
             k8s_ctx: String::new(),
@@ -109,10 +232,60 @@ impl NaveoApp {
             ns_filter: None,
             services: Vec::new(),
             prev_page: None,
+            k8s_events: Vec::new(),
+            resources: HashMap::new(),
+            forwards: Vec::new(),
+            pf_ns: String::new(),
+            pf_pod: String::new(),
+            pf_local: String::new(),
+            pf_target: String::new(),
+            pull_field: String::new(),
+            hub_query: String::new(),
+            hub_results: Vec::new(),
+            hub_tags: HashMap::new(),
+            hub_open_repo: None,
+            run_open: false,
+            run_image: String::new(),
+            run_name: String::new(),
+            run_env: vec![(String::new(), String::new())],
+            run_ports: vec![(String::new(), String::new())],
+            image_history: HashMap::new(),
+            history_open: None,
+            tag_field: String::new(),
+            pending_tag: None,
+            load_open: false,
+            registry_open: false,
+            reg_server: String::new(),
+            reg_user: String::new(),
+            reg_pass: String::new(),
+            sel_containers: HashSet::new(),
+            sel_images: HashSet::new(),
+            prune_confirm: None,
+            files_name: None,
+            files_path: String::new(),
+            files_entries: Vec::new(),
+            file_preview: None,
+            rename_pending: None,
+            rename_field: String::new(),
+            commit_pending: None,
+            commit_field: String::new(),
+            edit_container: None,
+            edit_env: vec![(String::new(), String::new())],
+            edit_ports: vec![(String::new(), String::new())],
+            log_timestamps: prefs.log_timestamps,
+            log_tail: 500,
+            log_level: String::new(),
+            cmd_history: Vec::new(),
+            cmd_hist_idx: None,
+            sort_containers: (0, true),
+            sort_images: (0, true),
+            theme_mode,
             search: String::new(),
             error: None,
+            notice: None,
             last_refresh: Instant::now() - Duration::from_secs(10),
             last_error: None,
+            last_notice: None,
         }
     }
 
@@ -126,6 +299,17 @@ impl NaveoApp {
         if self.k8s_ok {
             self.send(naveo_core::Command::RefreshK8s);
         }
+    }
+
+    /// Change le mode de thème et le persiste.
+    pub(crate) fn set_theme_mode(&mut self, mode: ThemeMode) {
+        self.theme_mode = mode;
+        self.dark = match mode {
+            ThemeMode::Sombre => true,
+            ThemeMode::Clair => false,
+            ThemeMode::Systeme => dark_light::detect().is_ok_and(|m| m == dark_light::Mode::Dark),
+        };
+        save_prefs(&prefs_of(self));
     }
 
     /// Ouvre un sélecteur de fichier et copie le kubeconfig dans ~/.kube/,
@@ -214,6 +398,51 @@ impl NaveoApp {
                     self.k8s_ctx = context;
                     self.send(naveo_core::Command::RefreshK8s);
                 }
+                Event::HubResults(list) => self.hub_results = list,
+                Event::HubTags { repo, tags } => {
+                    self.hub_tags.insert(repo, tags);
+                }
+                Event::ImageHistory { image, layers } => {
+                    self.image_history.insert(image, layers);
+                }
+                Event::FileList {
+                    name,
+                    path,
+                    entries,
+                } => {
+                    self.files_name = Some(name);
+                    self.files_path = path;
+                    self.files_entries = entries;
+                }
+                Event::FilePreview { path, content, .. } => {
+                    self.file_preview = Some((path, content));
+                }
+                Event::Events(list) => self.k8s_events = list,
+                Event::Resources { kind, items } => {
+                    self.resources.insert(kind, items);
+                }
+                Event::PortForwardActive {
+                    key,
+                    namespace,
+                    pod,
+                    local_port,
+                    target_port,
+                } => {
+                    self.forwards.push(ForwardInfo {
+                        key,
+                        namespace,
+                        pod,
+                        local_port,
+                        target_port,
+                    });
+                }
+                Event::PortForwardStopped { key, .. } => {
+                    self.forwards.retain(|f| f.key != key);
+                }
+                Event::Notice(msg) => {
+                    self.notice = Some(msg);
+                    self.last_notice = Some(Instant::now());
+                }
                 Event::Error(e) => {
                     self.error = Some(e);
                     self.last_error = Some(Instant::now());
@@ -233,11 +462,19 @@ impl eframe::App for NaveoApp {
                 theme::light()
             };
         }
+        // Re-détecte le thème système en mode « system ».
+        if self.theme_mode == ThemeMode::Systeme {
+            let sys_dark = dark_light::detect().is_ok_and(|m| m == dark_light::Mode::Dark);
+            if sys_dark != self.dark {
+                self.dark = sys_dark;
+            }
+        }
         theme::apply(ctx, &self.palette);
 
         self.poll_events();
 
-        // Changement de page : démarre/arrête les flux du détail conteneur.
+        // Changement de page : démarre/arrête les flux du détail conteneur,
+        // charge les ressources K8s à la demande.
         if self.prev_page.as_ref() != Some(&self.page) {
             if let Some(Page::ContainerDetail(name)) = &self.prev_page {
                 self.send(naveo_core::Command::StopFollow {
@@ -248,12 +485,35 @@ impl eframe::App for NaveoApp {
                 });
                 self.following.remove(&format!("docker:{name}"));
             }
-            if let Page::ContainerDetail(name) = &self.page {
-                let key = format!("docker:{name}");
-                self.following.insert(key.clone());
-                self.send(naveo_core::Command::FollowLogs { key });
-                self.send(naveo_core::Command::FollowStats(name.clone()));
-                self.send(naveo_core::Command::InspectContainer(name.clone()));
+            match &self.page {
+                Page::ContainerDetail(name) => {
+                    let key = format!("docker:{name}");
+                    self.following.insert(key.clone());
+                    self.send(naveo_core::Command::FollowLogs { key });
+                    self.send(naveo_core::Command::FollowStats(name.clone()));
+                    self.send(naveo_core::Command::InspectContainer(name.clone()));
+                }
+                Page::ConfigMaps if !self.resources.contains_key("configmaps") => {
+                    self.send(naveo_core::Command::LoadResources {
+                        kind: "configmaps".into(),
+                    });
+                }
+                Page::Secrets if !self.resources.contains_key("secrets") => {
+                    self.send(naveo_core::Command::LoadResources {
+                        kind: "secrets".into(),
+                    });
+                }
+                Page::Ingress if !self.resources.contains_key("ingresses") => {
+                    self.send(naveo_core::Command::LoadResources {
+                        kind: "ingresses".into(),
+                    });
+                }
+                Page::Stockage if !self.resources.contains_key("pvcs") => {
+                    self.send(naveo_core::Command::LoadResources {
+                        kind: "pvcs".into(),
+                    });
+                }
+                _ => {}
             }
             self.prev_page = Some(self.page.clone());
         }
@@ -285,6 +545,11 @@ impl eframe::App for NaveoApp {
                 Page::Pods => views::k8s::pods(self, ui),
                 Page::Services => views::k8s::services(self, ui),
                 Page::Deploiements => views::k8s::deployments(self, ui),
+                Page::Evenements => views::k8s::events(self, ui),
+                Page::ConfigMaps => views::k8s::resources(self, ui, "configmaps"),
+                Page::Secrets => views::k8s::resources(self, ui, "secrets"),
+                Page::Ingress => views::k8s::resources(self, ui, "ingresses"),
+                Page::Stockage => views::k8s::resources(self, ui, "pvcs"),
                 Page::ContainerDetail(name) => views::detail::show(self, ui, &name),
                 Page::Terminal => views::terminal::show(self, ui),
                 Page::Journal => views::logs::show(self, ui),
@@ -303,6 +568,21 @@ impl eframe::App for NaveoApp {
                     });
             } else {
                 self.error = None;
+            }
+        }
+
+        // Toast de notification (succès d'une opération).
+        if let (Some(msg), Some(when)) = (self.notice.clone(), self.last_notice) {
+            if when.elapsed() < Duration::from_secs(4) {
+                egui::Window::new("ℹ Naveo")
+                    .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -48.0])
+                    .resizable(false)
+                    .collapsible(false)
+                    .show(ctx, |ui| {
+                        ui.colored_label(self.palette.ok, &msg);
+                    });
+            } else {
+                self.notice = None;
             }
         }
     }
@@ -361,6 +641,11 @@ impl NaveoApp {
                 self.nav_item(ui, "🫧", "Pods", Page::Pods);
                 self.nav_item(ui, "🔌", "Services", Page::Services);
                 self.nav_item(ui, "🚀", "Déploiements", Page::Deploiements);
+                self.nav_item(ui, "⚡", "Événements", Page::Evenements);
+                self.nav_item(ui, "🗂", "ConfigMaps", Page::ConfigMaps);
+                self.nav_item(ui, "🔑", "Secrets", Page::Secrets);
+                self.nav_item(ui, "🌐", "Ingress", Page::Ingress);
+                self.nav_item(ui, "🗄", "Stockage", Page::Stockage);
 
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     ui.add_space(8.0);
@@ -473,4 +758,55 @@ fn status_chip(ui: &mut egui::Ui, p: Palette, label: &str, ok: bool) {
                 ui.label(egui::RichText::new(label).size(12.0));
             });
         });
+}
+
+// ---------------------------------------------------------------------------
+// Préférences persistées (~/.naveo/prefs.json)
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct Prefs {
+    /// dark | light | system
+    #[serde(default)]
+    theme: String,
+    #[serde(default)]
+    log_timestamps: bool,
+}
+
+fn prefs_path() -> Option<std::path::PathBuf> {
+    home::home_dir().map(|h| h.join(".naveo").join("prefs.json"))
+}
+
+fn load_prefs() -> Prefs {
+    let Some(path) = prefs_path() else {
+        return Prefs {
+            theme: "dark".into(),
+            log_timestamps: false,
+        };
+    };
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(Prefs {
+            theme: "dark".into(),
+            log_timestamps: false,
+        })
+}
+
+fn prefs_of(app: &NaveoApp) -> Prefs {
+    Prefs {
+        theme: app.theme_mode.key().into(),
+        log_timestamps: app.log_timestamps,
+    }
+}
+
+fn save_prefs(prefs: &Prefs) {
+    if let Some(path) = prefs_path() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_string_pretty(prefs) {
+            let _ = std::fs::write(path, json);
+        }
+    }
 }

@@ -16,7 +16,14 @@ pub enum Command {
     KillContainer(String),
     RemoveContainer(String),
     RemoveImage(String),
-    ContainerLogs(String),
+    /// Récupère des logs one-shot (avec options d'affichage).
+    ContainerLogs {
+        name: String,
+        /// Préfixer chaque ligne d'un timestamp.
+        timestamps: bool,
+        /// Nombre de lignes à récupérer (0 = tout).
+        tail: i64,
+    },
     /// Action sur tout un projet Compose : start | stop | restart | remove.
     ProjectAction {
         project: String,
@@ -37,6 +44,106 @@ pub enum Command {
         key: String,
     },
 
+    // Actions en masse / prune
+    /// Applique une action (start|stop|restart|remove|pause) à plusieurs conteneurs.
+    BulkContainers {
+        names: Vec<String>,
+        action: String,
+    },
+    /// Nettoie les ressources inutilisées : containers|images|volumes|networks.
+    Prune {
+        kind: String,
+    },
+
+    // Images : pull, Docker Hub, gestion avancée
+    /// Recherche des images sur Docker Hub.
+    HubSearch {
+        query: String,
+    },
+    /// Liste les tags d'un dépôt Docker Hub.
+    HubTags {
+        repo: String,
+    },
+    /// Tire une image (ex. « nginx:alpine »).
+    PullImage {
+        image: String,
+    },
+    /// Crée et démarre un conteneur à partir d'une image.
+    RunContainer {
+        image: String,
+        name: String,
+        env: Vec<(String, String)>,
+        /// (port conteneur, port hôte)
+        ports: Vec<(String, String)>,
+    },
+    /// Applique un nouveau tag à une image.
+    TagImage {
+        image: String,
+        tag: String,
+    },
+    /// Exporte une image vers un fichier tar.
+    SaveImage {
+        image: String,
+        path: String,
+    },
+    /// Importe une image depuis un fichier tar.
+    LoadImage {
+        path: String,
+    },
+    /// Historique des couches d'une image.
+    ImageHistory(String),
+    /// Connecte un registre (écrit ~/.docker/config.json).
+    RegistryLogin {
+        server: String,
+        username: String,
+        password: String,
+    },
+    /// Déconnecte un registre.
+    RegistryLogout(String),
+
+    // Fichiers du conteneur
+    /// Liste un répertoire du conteneur (via archive tar).
+    ListFiles {
+        name: String,
+        path: String,
+    },
+    /// Aperçu d'un fichier du conteneur.
+    PreviewFile {
+        name: String,
+        path: String,
+    },
+    /// Sauvegarde un fichier/répertoire du conteneur vers le disque.
+    SaveFile {
+        name: String,
+        path: String,
+        dest: String,
+    },
+
+    // Édition à chaud
+    /// Renomme un conteneur.
+    RenameContainer {
+        name: String,
+        new_name: String,
+    },
+    /// Crée un commit (image) à partir d'un conteneur.
+    CommitContainer {
+        name: String,
+        repo: String,
+        tag: String,
+    },
+    /// Exporte le système de fichiers du conteneur en tar.
+    ExportContainer {
+        name: String,
+        path: String,
+    },
+    /// Recrée le conteneur avec de nouvelles variables d'env / ports.
+    RecreateContainer {
+        name: String,
+        env: Vec<(String, String)>,
+        /// (port conteneur, port hôte)
+        ports: Vec<(String, String)>,
+    },
+
     // Kubernetes
     RefreshK8s,
     DeletePod {
@@ -48,6 +155,32 @@ pub enum Command {
         name: String,
         container: String,
         previous: bool,
+    },
+    /// Passe un déploiement à `replicas` réplicas.
+    ScaleDeployment {
+        namespace: String,
+        name: String,
+        replicas: i32,
+    },
+    /// Redémarre un déploiement (rollout restart, annotation restartedAt).
+    RolloutRestart {
+        namespace: String,
+        name: String,
+    },
+    /// Charge un type de ressource en lecture : configmaps|secrets|ingresses|pvcs.
+    LoadResources {
+        kind: String,
+    },
+    /// Redirige un port local vers un pod (clé : « pf:<local_port> »).
+    PortForward {
+        namespace: String,
+        pod: String,
+        target_port: u16,
+        local_port: u16,
+    },
+    /// Arrête un port-forward (clé : « pf:<local_port> »).
+    StopPortForward {
+        key: String,
     },
 
     // Exécution de commandes (terminal)
@@ -121,6 +254,52 @@ pub enum Event {
     K8sConnected {
         context: String,
     },
+    /// Résultats d'une recherche Docker Hub.
+    HubResults(Vec<HubRepo>),
+    /// Tags disponibles pour un dépôt Docker Hub.
+    HubTags {
+        repo: String,
+        tags: Vec<String>,
+    },
+    /// Historique (couches) d'une image.
+    ImageHistory {
+        image: String,
+        layers: Vec<ImageLayerInfo>,
+    },
+    /// Contenu d'un répertoire du conteneur.
+    FileList {
+        name: String,
+        path: String,
+        entries: Vec<ContainerFile>,
+    },
+    /// Aperçu d'un fichier du conteneur.
+    FilePreview {
+        name: String,
+        path: String,
+        content: String,
+    },
+    /// Événements Kubernetes récents.
+    Events(Vec<K8sEventInfo>),
+    /// Liste de ressources en lecture (configmaps, secrets…).
+    Resources {
+        kind: String,
+        items: Vec<ResourceInfo>,
+    },
+    /// Un port-forward est actif.
+    PortForwardActive {
+        key: String,
+        namespace: String,
+        pod: String,
+        local_port: u16,
+        target_port: u16,
+    },
+    /// Un port-forward s'est arrêté (fin de flux ou erreur).
+    PortForwardStopped {
+        key: String,
+        reason: String,
+    },
+    /// Notification générique (succès d'une opération…).
+    Notice(String),
     Error(String),
 }
 
@@ -245,4 +424,65 @@ pub struct ServiceInfo {
     pub service_type: String,
     pub cluster_ip: String,
     pub ports: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Modèles Docker Hub, fichiers, couches, K8s génériques
+// ---------------------------------------------------------------------------
+
+/// Dépôt trouvé sur Docker Hub.
+#[derive(Debug, Clone, Default)]
+pub struct HubRepo {
+    pub name: String,
+    pub description: String,
+    pub stars: u64,
+    pub pulls: u64,
+    pub official: bool,
+}
+
+/// Une couche de l'historique d'une image.
+#[derive(Debug, Clone, Default)]
+pub struct ImageLayerInfo {
+    /// « CreatedBy » (commande de la couche, souvent une commande shell).
+    pub created_by: String,
+    pub size_bytes: u64,
+    /// Secondes depuis l'époque.
+    pub created: i64,
+}
+
+/// Une entrée dans un répertoire du conteneur.
+#[derive(Debug, Clone, Default)]
+pub struct ContainerFile {
+    pub name: String,
+    /// Octets (0 pour un répertoire).
+    pub size: u64,
+    pub is_dir: bool,
+    /// Permissions lisibles (« drwxr-xr-x ») si disponibles.
+    pub mode: String,
+}
+
+/// Événement Kubernetes (type Event du cluster).
+#[derive(Debug, Clone, Default)]
+pub struct K8sEventInfo {
+    pub namespace: String,
+    /// Objet concerné (« Pod/nginx-abc »).
+    pub involved: String,
+    /// Normal | Warning
+    pub event_type: String,
+    pub reason: String,
+    pub message: String,
+    pub count: i32,
+    /// Dernière occurrence (« 3 min », « 2 h »…).
+    pub last_seen: String,
+}
+
+/// Ressource Kubernetes générique en lecture seule.
+#[derive(Debug, Clone, Default)]
+pub struct ResourceInfo {
+    pub name: String,
+    pub namespace: String,
+    /// Détails courts selon le type (clés d'une ConfigMap, type/endpoints…).
+    pub summary: String,
+    /// Âge lisible (« 3 d », « 2 h »…).
+    pub age: String,
 }

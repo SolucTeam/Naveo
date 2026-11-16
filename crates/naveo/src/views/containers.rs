@@ -1,5 +1,5 @@
-//! Vue Conteneurs — groupés par projet Compose, avec actions projet
-//! et actions par conteneur.
+//! Vue Conteneurs — groupés par projet Compose, avec multi-sélection,
+//! actions en masse, actions projet et actions par conteneur.
 
 use std::collections::BTreeMap;
 
@@ -8,13 +8,13 @@ use naveo_core::{Command, ContainerInfo};
 
 use crate::app::{NaveoApp, Page};
 use crate::theme;
-use crate::views::page_header;
+use crate::views::{copy_btn, page_header, sort_header};
 
 pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
     let p = app.palette;
     let search = app.search.to_lowercase();
 
-    let containers: Vec<ContainerInfo> = app
+    let mut containers: Vec<ContainerInfo> = app
         .containers
         .clone()
         .into_iter()
@@ -28,11 +28,32 @@ pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
         })
         .collect();
 
+    // Tri par colonne : 0 nom, 1 image, 2 état.
+    let (col, asc) = app.sort_containers;
+    containers.sort_by(|a, b| {
+        let ord = match col {
+            1 => a.image.cmp(&b.image),
+            2 => a.state.cmp(&b.state),
+            _ => a.name.cmp(&b.name),
+        };
+        if asc {
+            ord
+        } else {
+            ord.reverse()
+        }
+    });
+
+    let running = containers.iter().filter(|c| c.state == "running").count();
     page_header(
         ui,
         &p,
         "Conteneurs",
-        &format!("{} conteneur(s)", containers.len()),
+        &format!(
+            "{} conteneur(s) · {} actif(s) · {} sélectionné(s)",
+            containers.len(),
+            running,
+            app.sel_containers.len()
+        ),
     );
 
     if !app.docker_ok {
@@ -41,6 +62,46 @@ pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
             "Docker n'est pas joignable. Lance un daemon Docker puis ↻.",
         );
         return;
+    }
+
+    // Barre d'actions en masse.
+    if !app.sel_containers.is_empty() {
+        theme::card(ui, &p, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("{} sélectionné(s) :", app.sel_containers.len()))
+                        .strong(),
+                );
+                if ui.button("▶ Démarrer").clicked() {
+                    app.send(Command::BulkContainers {
+                        names: app.sel_containers.iter().cloned().collect(),
+                        action: "start".into(),
+                    });
+                }
+                if ui.button("⏹ Arrêter").clicked() {
+                    app.send(Command::BulkContainers {
+                        names: app.sel_containers.iter().cloned().collect(),
+                        action: "stop".into(),
+                    });
+                }
+                if ui.button("🔄 Redémarrer").clicked() {
+                    app.send(Command::BulkContainers {
+                        names: app.sel_containers.iter().cloned().collect(),
+                        action: "restart".into(),
+                    });
+                }
+                if ui.button("🗑 Supprimer").clicked() {
+                    app.send(Command::BulkContainers {
+                        names: app.sel_containers.iter().cloned().collect(),
+                        action: "remove".into(),
+                    });
+                }
+                if ui.button("✗ Désélectionner").clicked() {
+                    app.sel_containers.clear();
+                }
+            });
+        });
+        ui.add_space(4.0);
     }
 
     // Groupement par projet Compose.
@@ -108,8 +169,17 @@ pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
                         }
                         ui.add_space(2.0);
 
+                        // En-têtes triables.
+                        ui.horizontal(|ui| {
+                            ui.label("　"); // colonne des cases
+                            sort_header(ui, &mut app.sort_containers, 0, "Nom");
+                            sort_header(ui, &mut app.sort_containers, 1, "Image");
+                            sort_header(ui, &mut app.sort_containers, 2, "État");
+                        });
+                        ui.separator();
+
                         egui::Grid::new(format!("grid-{group}"))
-                            .num_columns(6)
+                            .num_columns(7)
                             .spacing([16.0, 6.0])
                             .striped(true)
                             .show(ui, |ui| {
@@ -127,6 +197,17 @@ pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
 fn container_row(app: &mut NaveoApp, ui: &mut egui::Ui, c: &ContainerInfo) {
     let p = app.palette;
     let color = theme::state_color(&p, &c.state);
+    let id_short = c.id.chars().take(12).collect::<String>();
+
+    // Case de sélection multiple.
+    let mut selected = app.sel_containers.contains(&c.name);
+    if ui.checkbox(&mut selected, "").changed() {
+        if selected {
+            app.sel_containers.insert(c.name.clone());
+        } else {
+            app.sel_containers.remove(&c.name);
+        }
+    }
 
     // Statut + nom (cliquable : ouvre le détail)
     ui.horizontal(|ui| {
@@ -146,8 +227,16 @@ fn container_row(app: &mut NaveoApp, ui: &mut egui::Ui, c: &ContainerInfo) {
         c.ports.join(", ")
     });
 
-    // Statut lisible
-    ui.label(egui::RichText::new(&c.status).color(p.dim));
+    // ID + copie
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(&id_short)
+                .color(p.dim)
+                .monospace()
+                .size(11.0),
+        );
+        copy_btn(ui, &c.id);
+    });
 
     // Actions
     ui.horizontal(|ui| {
