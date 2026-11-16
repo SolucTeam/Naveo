@@ -25,6 +25,20 @@ pub enum Command {
         name: String,
         container: String,
     },
+
+    // Exécution de commandes (terminal)
+    /// Lance une commande dans un conteneur Docker (`sh -c <cmd>`).
+    ExecContainer {
+        name: String,
+        cmd: String,
+    },
+    /// Lance une commande dans un pod Kubernetes (`sh -c <cmd>`).
+    PodExec {
+        namespace: String,
+        name: String,
+        container: String,
+        cmd: String,
+    },
 }
 
 /// Un état ou un résultat poussé vers l'UI.
@@ -43,6 +57,12 @@ pub enum Event {
     Pods(Vec<PodInfo>),
     Deployments(Vec<DeploymentInfo>),
     Logs {
+        target: String,
+        text: String,
+    },
+    /// Résultat d'une commande exécutée (terminal). `text` est ajouté
+    /// au tampon du terminal `target`.
+    ExecOutput {
         target: String,
         text: String,
     },

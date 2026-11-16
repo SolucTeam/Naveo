@@ -89,6 +89,27 @@ pub async fn dispatch(
                 text,
             })?;
         }
+        Command::ExecContainer { name, cmd } => {
+            let docker = docker.ok_or_else(|| anyhow::anyhow!("Docker non connecté"))?;
+            let text = docker::exec_container(docker, &name, &cmd).await?;
+            tx.send(Event::ExecOutput {
+                target: format!("docker:{name}"),
+                text,
+            })?;
+        }
+        Command::PodExec {
+            namespace,
+            name,
+            container,
+            cmd,
+        } => {
+            let client = kube.ok_or_else(|| anyhow::anyhow!("Kubernetes non connecté"))?;
+            let text = k8s::pod_exec(client, &namespace, &name, Some(&container), &cmd).await?;
+            tx.send(Event::ExecOutput {
+                target: format!("k8s:{namespace}/{name}"),
+                text,
+            })?;
+        }
     }
     Ok(())
 }

@@ -111,6 +111,10 @@ fn container_row(app: &mut NaveoApp, ui: &mut egui::Ui, c: &ContainerInfo) {
         if ui.button("📜").on_hover_text("Logs").clicked() {
             app.send(Command::ContainerLogs(c.name.clone()));
         }
+        if ui.button("⌨").on_hover_text("Terminal").clicked() {
+            app.exec_target = Some(format!("docker:{}", c.name));
+            app.page = crate::app::Page::Terminal;
+        }
         if ui.button("🗑").on_hover_text("Supprimer").clicked() {
             app.send(Command::RemoveContainer(c.name.clone()));
         }

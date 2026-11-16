@@ -2,9 +2,10 @@
 
 use anyhow::Result;
 use bollard::container::{LogOutput, LogsOptions, RemoveContainerOptions};
+use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::image::RemoveImageOptions;
 use bollard::Docker;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 
 use crate::events::{ContainerInfo, ImageInfo, NetworkInfo, VolumeInfo};
 
@@ -156,6 +157,43 @@ pub async fn remove_image(docker: &Docker, name: &str) -> Result<()> {
     };
     docker.remove_image(name, Some(opts), None).await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Exec (terminal)
+// ---------------------------------------------------------------------------
+
+/// Exécute `sh -c <cmd>` dans le conteneur et renvoie la sortie combinée.
+/// Chaque commande crée un nouvel exec : pas de session PTY persistante,
+/// mais fiable et suffisant pour un terminal « par commande ».
+pub async fn exec_container(docker: &Docker, name: &str, cmd: &str) -> Result<String> {
+    let exec = docker
+        .create_exec(
+            name,
+            CreateExecOptions::<String> {
+                attach_stdout: Some(true),
+                attach_stderr: Some(true),
+                cmd: Some(vec!["sh".into(), "-c".into(), cmd.into()]),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    let mut out = String::new();
+    match docker.start_exec(&exec.id, None).await? {
+        StartExecResults::Attached { mut output, .. } => {
+            while let Some(msg) = output.next().await {
+                match msg? {
+                    LogOutput::StdOut { message } | LogOutput::StdErr { message } => {
+                        out.push_str(&String::from_utf8_lossy(&message));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        StartExecResults::Detached => {}
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------

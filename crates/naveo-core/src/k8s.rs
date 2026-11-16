@@ -3,7 +3,7 @@
 use anyhow::Result;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{Node, Pod};
-use kube::api::{DeleteParams, ListParams, LogParams};
+use kube::api::{AttachParams, DeleteParams, ListParams, LogParams};
 use kube::{Api, Client};
 
 use crate::events::{DeploymentInfo, NodeInfo, PodInfo};
@@ -133,6 +133,64 @@ pub async fn pod_logs(client: &Client, namespace: &str, name: &str) -> Result<St
         ..Default::default()
     };
     Ok(pods.logs(name, &params).await?)
+}
+
+// ---------------------------------------------------------------------------
+// Exec (terminal)
+// ---------------------------------------------------------------------------
+
+/// Exécute `sh -c <cmd>` dans le pod (1er conteneur si non précisé)
+/// et renvoie la sortie combinée stdout + stderr.
+pub async fn pod_exec(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    container: Option<&str>,
+    cmd: &str,
+) -> Result<String> {
+    use tokio::io::AsyncReadExt;
+
+    let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
+    let params = AttachParams {
+        stdin: false,
+        stdout: true,
+        stderr: true,
+        container: container.map(|c| c.to_string()),
+        ..Default::default()
+    };
+
+    let mut proc = pods
+        .exec(
+            name,
+            vec!["sh".to_string(), "-c".to_string(), cmd.to_string()],
+            &params,
+        )
+        .await?;
+
+    let mut out = String::new();
+    if let Some(mut stdout) = proc.stdout() {
+        let mut buf = vec![0u8; 65_536];
+        loop {
+            match stdout.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => out.push_str(&String::from_utf8_lossy(&buf[..n])),
+            }
+        }
+    }
+
+    // Attend la fin du process : en cas d'échec, K8s renvoie un Status
+    // (« Failure », raison + message). On l'affiche de façon lisible.
+    if let Some(status) = proc.take_status() {
+        if let Some(status) = status.await {
+            if status.status.as_deref() == Some("Failure") {
+                let reason = status.reason.clone().unwrap_or_default();
+                let message = status.message.clone().unwrap_or_default();
+                out.push_str(&format!("\n[échec : {reason} {message}]"));
+            }
+        }
+    }
+
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------

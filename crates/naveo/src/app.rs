@@ -19,6 +19,7 @@ pub enum Page {
     Noeuds,
     Pods,
     Deploiements,
+    Terminal,
     Journal,
     Parametres,
 }
@@ -45,6 +46,11 @@ pub struct NaveoApp {
 
     pub(crate) logs: HashMap<String, String>,
     pub(crate) log_target: Option<String>,
+
+    // Terminal exec
+    pub(crate) exec_out: HashMap<String, String>,
+    pub(crate) exec_target: Option<String>,
+    pub(crate) exec_busy: bool,
 
     pub(crate) search: String,
     pub(crate) error: Option<String>,
@@ -76,6 +82,9 @@ impl NaveoApp {
             deployments: Vec::new(),
             logs: HashMap::new(),
             log_target: None,
+            exec_out: HashMap::new(),
+            exec_target: None,
+            exec_busy: false,
             search: String::new(),
             error: None,
             last_refresh: Instant::now() - Duration::from_secs(10),
@@ -122,6 +131,15 @@ impl NaveoApp {
                 Event::Logs { target, text } => {
                     self.logs.insert(target.clone(), text);
                     self.log_target = Some(target);
+                }
+                Event::ExecOutput { target, text } => {
+                    let entry = self.exec_out.entry(target.clone()).or_default();
+                    entry.push_str(&text);
+                    if !text.ends_with('\n') {
+                        entry.push('\n');
+                    }
+                    self.log_target = Some(target);
+                    self.exec_busy = false;
                 }
                 Event::Error(e) => {
                     self.error = Some(e);
@@ -172,6 +190,7 @@ impl eframe::App for NaveoApp {
                 Page::Noeuds => views::k8s::nodes(self, ui),
                 Page::Pods => views::k8s::pods(self, ui),
                 Page::Deploiements => views::k8s::deployments(self, ui),
+                Page::Terminal => views::terminal::show(self, ui),
                 Page::Journal => views::logs::show(self, ui),
                 Page::Parametres => views::settings::show(self, ui),
             });
@@ -249,6 +268,7 @@ impl NaveoApp {
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     ui.add_space(8.0);
                     ui.separator();
+                    self.nav_item(ui, "⌨️", "Terminal", Page::Terminal);
                     self.nav_item(ui, "📜", "Journal", Page::Journal);
                     self.nav_item(ui, "⚙️", "Paramètres", Page::Parametres);
                 });

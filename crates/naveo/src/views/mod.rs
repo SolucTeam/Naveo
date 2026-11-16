@@ -6,6 +6,7 @@ pub mod k8s;
 pub mod logs;
 pub mod networks;
 pub mod settings;
+pub mod terminal;
 pub mod volumes;
 
 use eframe::egui;
