@@ -55,10 +55,7 @@ pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
         for (group, list) in groups {
             theme::card(ui, &p, |ui| {
                 let running = list.iter().filter(|c| c.state == "running").count();
-                let header = format!(
-                    "🗂 {}   ·   {}/{} actif(s)",
-                    group, running, list.len()
-                );
+                let header = format!("🗂 {}   ·   {}/{} actif(s)", group, running, list.len());
 
                 egui::CollapsingHeader::new(egui::RichText::new(header).strong())
                     .default_open(true)
@@ -105,26 +102,16 @@ fn container_row(app: &mut NaveoApp, ui: &mut egui::Ui, c: &ContainerInfo) {
     // Actions
     ui.horizontal(|ui| {
         let running = c.state == "running";
-        if ui
-            .add_enabled(!running, egui::Button::new("▶"))
-            .clicked()
-        {
+        if ui.add_enabled(!running, egui::Button::new("▶")).clicked() {
             app.send(Command::StartContainer(c.name.clone()));
         }
-        if ui
-            .add_enabled(running, egui::Button::new("⏹"))
-            .clicked()
-        {
+        if ui.add_enabled(running, egui::Button::new("⏹")).clicked() {
             app.send(Command::StopContainer(c.name.clone()));
         }
         if ui.button("📜").on_hover_text("Logs").clicked() {
             app.send(Command::ContainerLogs(c.name.clone()));
         }
-        if ui
-            .button("🗑")
-            .on_hover_text("Supprimer")
-            .clicked()
-        {
+        if ui.button("🗑").on_hover_text("Supprimer").clicked() {
             app.send(Command::RemoveContainer(c.name.clone()));
         }
     });

@@ -24,7 +24,10 @@ pub async fn connect() -> Result<(Client, String)> {
 // ---------------------------------------------------------------------------
 
 pub async fn list_nodes(client: &Client) -> Result<Vec<NodeInfo>> {
-    let nodes: Vec<Node> = Api::all(client.clone()).list(&ListParams::default()).await?.items;
+    let nodes: Vec<Node> = Api::all(client.clone())
+        .list(&ListParams::default())
+        .await?
+        .items;
 
     Ok(nodes
         .into_iter()
@@ -84,7 +87,10 @@ pub async fn list_nodes(client: &Client) -> Result<Vec<NodeInfo>> {
 // ---------------------------------------------------------------------------
 
 pub async fn list_pods(client: &Client) -> Result<Vec<PodInfo>> {
-    let pods: Vec<Pod> = Api::all(client.clone()).list(&ListParams::default()).await?.items;
+    let pods: Vec<Pod> = Api::all(client.clone())
+        .list(&ListParams::default())
+        .await?
+        .items;
 
     Ok(pods
         .into_iter()
@@ -134,7 +140,10 @@ pub async fn pod_logs(client: &Client, namespace: &str, name: &str) -> Result<St
 // ---------------------------------------------------------------------------
 
 pub async fn list_deployments(client: &Client) -> Result<Vec<DeploymentInfo>> {
-    let deps: Vec<Deployment> = Api::all(client.clone()).list(&ListParams::default()).await?.items;
+    let deps: Vec<Deployment> = Api::all(client.clone())
+        .list(&ListParams::default())
+        .await?
+        .items;
 
     Ok(deps
         .into_iter()

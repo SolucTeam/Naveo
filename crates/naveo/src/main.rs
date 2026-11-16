@@ -27,10 +27,7 @@ fn main() -> eframe::Result<()> {
         let _ = evt_tx.send(Event::Connected {
             docker: docker.is_some(),
             kubernetes: k8s.is_some(),
-            context: k8s
-                .as_ref()
-                .map(|(_, ctx)| ctx.clone())
-                .unwrap_or_default(),
+            context: k8s.as_ref().map(|(_, ctx)| ctx.clone()).unwrap_or_default(),
         });
 
         while let Some(cmd) = cmd_rx.recv().await {

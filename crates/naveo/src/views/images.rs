@@ -15,12 +15,7 @@ pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
         .images
         .clone()
         .into_iter()
-        .filter(|i| {
-            search.is_empty()
-                || i.tags
-                    .iter()
-                    .any(|t| t.to_lowercase().contains(&search))
-        })
+        .filter(|i| search.is_empty() || i.tags.iter().any(|t| t.to_lowercase().contains(&search)))
         .collect();
 
     let total_bytes: u64 = images.iter().map(|i| i.size_bytes).sum();
@@ -29,7 +24,11 @@ pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
         ui,
         &p,
         "Images",
-        &format!("{} image(s) · {}", images.len(), theme::human_size(total_bytes)),
+        &format!(
+            "{} image(s) · {}",
+            images.len(),
+            theme::human_size(total_bytes)
+        ),
     );
 
     if !app.docker_ok {
@@ -52,7 +51,11 @@ pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
                     ui.end_row();
 
                     for img in &images {
-                        let tag = img.tags.first().cloned().unwrap_or_else(|| "<sans tag>".into());
+                        let tag = img
+                            .tags
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| "<sans tag>".into());
                         let extra = img.tags.len().saturating_sub(1);
 
                         ui.horizontal(|ui| {

@@ -4,6 +4,11 @@
 
 **Conteneurs + Kubernetes, une seule app native en Rust.**
 
+[![CI](https://github.com/crabearaignee/Naveo/actions/workflows/ci.yml/badge.svg)](https://github.com/crabearaignee/Naveo/actions/workflows/ci.yml)
+[![Release](https://github.com/crabearaignee/Naveo/actions/workflows/release.yml/badge.svg)](https://github.com/crabearaignee/Naveo/releases)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-555)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20·%20Linux%20·%20Windows-2ea043)
+
 *Design inspiré de [Kiri](https://github.com/libracoder/kiri) · fonctionnalités Kubernetes inspirées de [Headlamp](https://github.com/kubernetes-sigs/headlamp)*
 
 </div>
@@ -57,6 +62,12 @@ UI egui ──► Command (mpsc tokio) ──► tâche de fond (naveo-core)
    ▲                                     │  bollard / kube-rs
    └──── Event (crossbeam channel) ◄─────┘  Docker socket / API K8s
 ```
+
+## Télécharger
+
+Binaires précompilés (macOS Apple Silicon/Intel, Linux x64/arm64, Windows x64)
+dans les [GitHub Releases](https://github.com/crabearaignee/Naveo/releases) —
+publiés automatiquement à chaque tag `v*`.
 
 ## Build & lancement
 

@@ -36,12 +36,7 @@ pub async fn list_containers(docker: &Docker) -> Result<Vec<ContainerInfo>> {
     Ok(list
         .into_iter()
         .map(|c| ContainerInfo {
-            id: c
-                .id
-                .unwrap_or_default()
-                .chars()
-                .take(12)
-                .collect(),
+            id: c.id.unwrap_or_default().chars().take(12).collect(),
             name: c
                 .names
                 .unwrap_or_default()
@@ -130,7 +125,10 @@ pub async fn list_networks(docker: &Docker) -> Result<Vec<NetworkInfo>> {
 
 pub async fn start_container(docker: &Docker, name: &str) -> Result<()> {
     docker
-        .start_container(name, None::<bollard::container::StartContainerOptions<String>>)
+        .start_container(
+            name,
+            None::<bollard::container::StartContainerOptions<String>>,
+        )
         .await?;
     Ok(())
 }

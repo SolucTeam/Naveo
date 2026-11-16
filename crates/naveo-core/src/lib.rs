@@ -79,7 +79,9 @@ pub async fn dispatch(
             k8s::delete_pod(client, &namespace, &name).await?;
             tx.send(Event::Pods(k8s::list_pods(client).await?))?;
         }
-        Command::PodLogs { namespace, name, .. } => {
+        Command::PodLogs {
+            namespace, name, ..
+        } => {
             let client = kube.ok_or_else(|| anyhow::anyhow!("Kubernetes non connecté"))?;
             let text = k8s::pod_logs(client, &namespace, &name).await?;
             tx.send(Event::Logs {

@@ -102,7 +102,11 @@ impl NaveoApp {
     fn poll_events(&mut self) {
         while let Ok(ev) = self.evt_rx.try_recv() {
             match ev {
-                Event::Connected { docker, kubernetes, context } => {
+                Event::Connected {
+                    docker,
+                    kubernetes,
+                    context,
+                } => {
                     self.docker_ok = docker;
                     self.k8s_ok = kubernetes;
                     self.k8s_ctx = context;
@@ -132,7 +136,11 @@ impl eframe::App for NaveoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Rafraîchit la palette si le thème a changé.
         if self.dark != self.palette.dark {
-            self.palette = if self.dark { theme::dark() } else { theme::light() };
+            self.palette = if self.dark {
+                theme::dark()
+            } else {
+                theme::light()
+            };
         }
         theme::apply(ctx, &self.palette);
 
@@ -151,7 +159,11 @@ impl eframe::App for NaveoApp {
         self.draw_topbar(ctx);
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::default().fill(self.palette.bg).inner_margin(egui::Margin::symmetric(16, 12)))
+            .frame(
+                egui::Frame::default()
+                    .fill(self.palette.bg)
+                    .inner_margin(egui::Margin::symmetric(16, 12)),
+            )
             .show(ctx, |ui| match self.page {
                 Page::Conteneurs => views::containers::show(self, ui),
                 Page::Images => views::images::show(self, ui),
@@ -186,7 +198,11 @@ impl NaveoApp {
         let p = self.palette;
         egui::SidePanel::left("sidebar")
             .exact_width(190.0)
-            .frame(egui::Frame::default().fill(p.panel).inner_margin(egui::Margin::same(10)))
+            .frame(
+                egui::Frame::default()
+                    .fill(p.panel)
+                    .inner_margin(egui::Margin::same(10)),
+            )
             .show(ctx, |ui| {
                 ui.add_space(6.0);
 
@@ -219,7 +235,12 @@ impl NaveoApp {
                 self.nav_item(ui, "🕸", "Réseaux", Page::Reseaux);
 
                 ui.add_space(10.0);
-                ui.label(egui::RichText::new("KUBERNETES").size(10.0).color(p.dim).strong());
+                ui.label(
+                    egui::RichText::new("KUBERNETES")
+                        .size(10.0)
+                        .color(p.dim)
+                        .strong(),
+                );
                 ui.add_space(2.0);
                 self.nav_item(ui, "🖥", "Nœuds", Page::Noeuds);
                 self.nav_item(ui, "🫧", "Pods", Page::Pods);
@@ -238,7 +259,12 @@ impl NaveoApp {
         let p = self.palette;
         let selected = self.page == page;
         let text = format!("{icon}  {label}");
-        let resp = ui.selectable_label(selected, egui::RichText::new(&text).size(14.0).color(if selected { p.accent } else { p.text }));
+        let resp = ui.selectable_label(
+            selected,
+            egui::RichText::new(&text)
+                .size(14.0)
+                .color(if selected { p.accent } else { p.text }),
+        );
         if resp.clicked() {
             self.page = page;
         }
@@ -247,14 +273,17 @@ impl NaveoApp {
     fn draw_topbar(&mut self, ctx: &egui::Context) {
         let p = self.palette;
         egui::TopBottomPanel::top("topbar")
-            .frame(egui::Frame::default().fill(p.panel).inner_margin(egui::Margin::symmetric(16, 8)))
+            .frame(
+                egui::Frame::default()
+                    .fill(p.panel)
+                    .inner_margin(egui::Margin::symmetric(16, 8)),
+            )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     // Recherche
                     let search = ui.add_sized(
                         [280.0, 24.0],
-                        egui::TextEdit::singleline(&mut self.search)
-                            .hint_text("🔍  Filtrer…"),
+                        egui::TextEdit::singleline(&mut self.search).hint_text("🔍  Filtrer…"),
                     );
                     if search.changed() {
                         // Le filtre est relu par les vues.

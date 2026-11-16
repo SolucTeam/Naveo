@@ -131,7 +131,9 @@ pub fn pods(app: &mut NaveoApp, ui: &mut egui::Ui) {
                         });
 
                         ui.label(
-                            egui::RichText::new(pod.containers.join(", ")).size(12.0).color(p.dim),
+                            egui::RichText::new(pod.containers.join(", "))
+                                .size(12.0)
+                                .color(p.dim),
                         );
 
                         if ui.button("📜").on_hover_text("Logs").clicked() {

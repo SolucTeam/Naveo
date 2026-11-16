@@ -16,8 +16,15 @@ pub enum Command {
 
     // Kubernetes
     RefreshK8s,
-    DeletePod { namespace: String, name: String },
-    PodLogs { namespace: String, name: String, container: String },
+    DeletePod {
+        namespace: String,
+        name: String,
+    },
+    PodLogs {
+        namespace: String,
+        name: String,
+        container: String,
+    },
 }
 
 /// Un état ou un résultat poussé vers l'UI.

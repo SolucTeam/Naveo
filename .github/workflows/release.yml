@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  BIN_NAME: naveo
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS — Apple Silicon et Intel
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: naveo-macos-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: naveo-macos-intel
+          # Linux — x86_64 et arm64 (build croisé via cargo-zigbuild)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: naveo-linux-x64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: naveo-linux-arm64
+          # Windows — x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: naveo-windows-x64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cargo-zigbuild (Linux cross-compile)
+        if: runner.os == 'Linux'
+        run: pip install cargo-zigbuild
+
+      - name: Build
+        working-directory: crates/naveo
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            cargo zigbuild --release --locked --target ${{ matrix.target }}
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+          fi
+        shell: bash
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../${{ matrix.artifact }}.tar.gz ${{ env.BIN_NAME }}
+          shasum -a 256 ${{ matrix.artifact }}.tar.gz > ../../../${{ matrix.artifact }}.tar.gz.sha256
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ env.BIN_NAME }}.exe" `
+            -DestinationPath "${{ matrix.artifact }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            naveo-*.tar.gz
+            naveo-*.tar.gz.sha256
+            naveo-*.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*

@@ -28,10 +28,7 @@ pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
     }
 
     // Sélection de la source.
-    let selected = app
-        .log_target
-        .clone()
-        .unwrap_or_else(|| targets[0].clone());
+    let selected = app.log_target.clone().unwrap_or_else(|| targets[0].clone());
     ui.horizontal(|ui| {
         ui.label("Source :");
         egui::ComboBox::from_id_salt("log-source")
