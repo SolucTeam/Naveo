@@ -130,12 +130,5 @@ pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new("À propos").strong());
         ui.add_space(4.0);
         ui.label("Naveo v0.1.0 — conteneurs + Kubernetes, une seule app native en Rust.");
-        ui.label(
-            egui::RichText::new(
-                "Interface inspirée de Kiri · fonctionnalités Kubernetes inspirées de Headlamp.",
-            )
-            .size(12.0)
-            .color(p.dim),
-        );
     });
 }

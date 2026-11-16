@@ -1,4 +1,4 @@
-//! Thème Naveo : palette inspirée de Kiri (sombre, calme, accents verts),
+//! Thème Naveo : palette sombre et calme, accents verts,
 //! cartes arrondies et espacement aéré.
 
 use egui::{vec2, Color32, Context, CornerRadius, Style};

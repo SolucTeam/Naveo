@@ -11,7 +11,7 @@ Quel besoin, quelle frustration ? (pas encore la solution)
 Ce que tu imagines, concrètement.
 
 **Alternatives envisagées**
-Autres pistes, y compris des outils existants (Kiri, Headlamp, k9s…).
+Autres pistes, y compris des outils existants (Headlamp, k9s…).
 
 **Contexte**
 Tout élément utile (captures, cas d'usage…).

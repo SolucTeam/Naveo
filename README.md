@@ -11,16 +11,14 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-555)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20·%20Linux%20·%20Windows-2ea043)
 
-*Design inspiré de [Kiri](https://github.com/libracoder/kiri) · fonctionnalités Kubernetes inspirées de [Headlamp](https://github.com/kubernetes-sigs/headlamp)*
-
 </div>
 
 ---
 
 Naveo est une application desktop **100 % Rust** (pas d'Electron, pas de navigateur embarqué) qui réunit dans une même fenêtre :
 
-- la **gestion des conteneurs Docker** (conteneurs, images, volumes, réseaux, logs) — la rapidité et la sobriété de Kiri,
-- la **vision Kubernetes** (nœuds, pods, déploiements, logs de pods) — la clarté de Headlamp.
+- la **gestion des conteneurs Docker** (conteneurs, images, volumes, réseaux, logs),
+- la **vision Kubernetes** (nœuds, pods, déploiements, logs de pods, multi-cluster).
 
 ## Fonctionnalités (v0.1.0 — MVP)
 
@@ -40,7 +38,7 @@ Naveo est une application desktop **100 % Rust** (pas d'Electron, pas de navigat
 
 ### Interface
 - ✅ UI native Rust ([egui](https://github.com/emilk/egui)) : fenêtre légère, démarrage instantané
-- ✅ Thème sombre / clair, cartes arrondies, points de statut colorés (design Kiri)
+- ✅ Thème sombre / clair, cartes arrondies, points de statut colorés
 - ✅ Backend asynchrone (tokio) découplé de l'UI via canaux — l'interface ne se fige jamais
 
 ## Architecture
@@ -82,7 +80,7 @@ cargo build --release        # binaire : target/release/naveo
 ```
 
 L'app se connecte automatiquement à :
-- **Docker** : socket local (`/var/run/docker.sock`, Docker Desktop, Kiri…)
+- **Docker** : socket local (`/var/run/docker.sock`, Docker Desktop…)
 - **Kubernetes** : contexte par défaut de `~/.kube/config` (ou `$KUBECONFIG`)
 
 Si Docker ou Kubernetes ne sont pas disponibles, l'app se lance quand même
@@ -97,12 +95,11 @@ et affiche l'état des connexions ; les pages concernées restent désactivées.
 - [ ] Suivi des logs en continu (follow)
 - [ ] RBAC-aware : masquer les actions non permises
 - [ ] Compose : `up`/`down` depuis l'UI
-- [ ] Machines Linux façon Kiri
+- [ ] Machines Linux
 - [ ] Plugins (WebAssembly ?)
 
 ## Crédits
 
-- [Kiri](https://github.com/libracoder/kiri) — design, sobriété, esprit « petit et rapide »
 - [Headlamp](https://github.com/kubernetes-sigs/headlamp) — structure des vues Kubernetes
 - [bollard](https://github.com/fussybeaver/bollard), [kube-rs](https://github.com/kube-rs/kube), [egui](https://github.com/emilk/egui)
 

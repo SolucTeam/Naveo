@@ -1,4 +1,4 @@
-//! Vue Conteneurs — groupés par projet Compose, façon Kiri.
+//! Vue Conteneurs — groupés par projet Compose.
 
 use std::collections::BTreeMap;
 
@@ -37,7 +37,7 @@ pub fn show(app: &mut NaveoApp, ui: &mut egui::Ui) {
     if !app.docker_ok {
         ui.colored_label(
             p.warn,
-            "Docker n'est pas joignable. Lance un daemon (Docker Desktop, Kiri…) puis ↻.",
+            "Docker n'est pas joignable. Lance un daemon Docker puis ↻.",
         );
         return;
     }
