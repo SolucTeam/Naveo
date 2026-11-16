@@ -66,8 +66,9 @@ jobs:
         shell: bash
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.artifact }}.tar.gz ${{ env.BIN_NAME }}
-          shasum -a 256 ${{ matrix.artifact }}.tar.gz > ../../../${{ matrix.artifact }}.tar.gz.sha256
+          tar czf "$GITHUB_WORKSPACE/${{ matrix.artifact }}.tar.gz" ${{ env.BIN_NAME }}
+          cd "$GITHUB_WORKSPACE"
+          shasum -a 256 "${{ matrix.artifact }}.tar.gz" > "${{ matrix.artifact }}.tar.gz.sha256"
 
       - name: Package (windows)
         if: runner.os == 'Windows'
