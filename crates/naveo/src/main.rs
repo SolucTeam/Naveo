@@ -47,11 +47,15 @@ fn main() -> eframe::Result<()> {
         }
     });
 
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/logo.png"))
+        .expect("chargement de l'icône Naveo");
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([960.0, 600.0])
-            .with_title("Naveo"),
+            .with_title("Naveo")
+            .with_icon(std::sync::Arc::new(icon)),
         ..Default::default()
     };
 

@@ -1,6 +1,8 @@
 <div align="center">
 
-# ◆ Naveo
+<img src="assets/logo.png" alt="Naveo" width="140"/>
+
+# Naveo
 
 **Conteneurs + Kubernetes, une seule app native en Rust.**
 
