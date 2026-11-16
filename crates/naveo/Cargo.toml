@@ -1,0 +1,19 @@
+[package]
+name = "naveo"
+description = "Naveo — conteneurs + Kubernetes, une seule app native en Rust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "naveo"
+path = "src/main.rs"
+
+[dependencies]
+naveo-core = { path = "../naveo-core" }
+anyhow = "1"
+crossbeam-channel = "0.5"
+eframe = "0.31"
+egui = "0.31"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }

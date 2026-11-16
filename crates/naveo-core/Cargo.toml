@@ -1,0 +1,16 @@
+[package]
+name = "naveo-core"
+description = "Naveo — moteur partagé : clients Docker et Kubernetes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow = "1"
+bollard = "0.18"
+crossbeam-channel = "0.5"
+futures = "0.3"
+k8s-openapi = { version = "0.25", features = ["latest"] }
+kube = { version = "1", features = ["client"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
